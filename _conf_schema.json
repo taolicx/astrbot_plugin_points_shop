@@ -1,0 +1,186 @@
+{
+  "enabled": {
+    "description": "启用插件",
+    "type": "bool",
+    "default": true
+  },
+  "state_path": {
+    "description": "状态文件路径",
+    "type": "string",
+    "default": "data/state.json",
+    "hint": "保存积分、签到、库存、兑换记录。相对路径会放在插件目录下。"
+  },
+  "poster_path": {
+    "description": "商城海报缓存路径",
+    "type": "string",
+    "default": "data/shop_poster.png",
+    "hint": "发送 /商店 时动态生成的商品展示图。"
+  },
+  "signin_min_points": {
+    "description": "签到最少积分",
+    "type": "int",
+    "default": 8
+  },
+  "signin_max_points": {
+    "description": "签到最多积分",
+    "type": "int",
+    "default": 18
+  },
+  "streak_bonus_every_days": {
+    "description": "连续签到奖励周期",
+    "type": "int",
+    "default": 7,
+    "hint": "每连续签到多少天发一次额外奖励；填 0 表示关闭。"
+  },
+  "streak_bonus_points": {
+    "description": "连续签到额外积分",
+    "type": "int",
+    "default": 20
+  },
+  "min_bet": {
+    "description": "猜拳最小下注",
+    "type": "int",
+    "default": 5
+  },
+  "max_bet": {
+    "description": "猜拳最大下注",
+    "type": "int",
+    "default": 100
+  },
+  "items": {
+    "description": "可兑换商品",
+    "type": "template_list",
+    "default": [
+      {
+        "__template_key": "shop_item",
+        "id": "coffee",
+        "name": "今日咖啡",
+        "price": 60,
+        "stock": -1,
+        "emoji": "☕",
+        "description": "给自己兑换一杯精神补给",
+        "delivery": "请联系管理员核销。",
+        "color": "#6f4e37",
+        "enabled": true
+      },
+      {
+        "__template_key": "shop_item",
+        "id": "title",
+        "name": "群头衔定制",
+        "price": 180,
+        "stock": 5,
+        "emoji": "🏷",
+        "description": "兑换一次群头衔/称号修改",
+        "delivery": "兑换后把想要的头衔发给管理员。",
+        "color": "#4f46e5",
+        "enabled": true
+      },
+      {
+        "__template_key": "shop_item",
+        "id": "mystery",
+        "name": "神秘盲盒",
+        "price": 300,
+        "stock": 3,
+        "emoji": "🎁",
+        "description": "随机小奖励，开盒有惊喜",
+        "delivery": "管理员会在群内公布盲盒结果。",
+        "color": "#db2777",
+        "enabled": true
+      }
+    ],
+    "hint": "逐条配置商城商品。stock=-1 表示无限库存。",
+    "templates": {
+      "shop_item": {
+        "name": "商城商品",
+        "hint": "一个可兑换商品。",
+        "items": {
+          "id": {
+            "description": "商品ID",
+            "type": "string",
+            "default": "item",
+            "hint": "兑换时使用的短ID，例如 coffee。"
+          },
+          "name": {
+            "description": "商品名称",
+            "type": "string",
+            "default": "新商品"
+          },
+          "price": {
+            "description": "兑换价格",
+            "type": "int",
+            "default": 100
+          },
+          "stock": {
+            "description": "库存",
+            "type": "int",
+            "default": -1,
+            "hint": "-1 表示无限库存。"
+          },
+          "emoji": {
+            "description": "商品图标",
+            "type": "string",
+            "default": "🎁",
+            "hint": "会显示在商城海报中。"
+          },
+          "description": {
+            "description": "商品描述",
+            "type": "string",
+            "default": "商品说明"
+          },
+          "delivery": {
+            "description": "兑换说明",
+            "type": "string",
+            "default": "请联系管理员核销。",
+            "hint": "兑换成功后会回复给用户。"
+          },
+          "color": {
+            "description": "海报强调色",
+            "type": "string",
+            "default": "#38bdf8",
+            "hint": "格式如 #38bdf8。"
+          },
+          "enabled": {
+            "description": "启用商品",
+            "type": "bool",
+            "default": true
+          }
+        }
+      }
+    }
+  },
+  "poster_title": {
+    "description": "商城海报标题",
+    "type": "string",
+    "default": "积分兑换商城"
+  },
+  "poster_subtitle": {
+    "description": "商城海报副标题",
+    "type": "string",
+    "default": "签到积累，猜拳翻倍，把喜欢的奖励带回家"
+  },
+  "poster_width": {
+    "description": "商城海报宽度",
+    "type": "int",
+    "default": 1080
+  },
+  "leaderboard_limit": {
+    "description": "排行榜人数",
+    "type": "int",
+    "default": 10
+  },
+  "enable_admin_adjust": {
+    "description": "允许管理员调整积分",
+    "type": "bool",
+    "default": true
+  },
+  "max_exchange_records": {
+    "description": "最多保留兑换记录数",
+    "type": "int",
+    "default": 500
+  },
+  "max_game_records": {
+    "description": "最多保留猜拳记录数",
+    "type": "int",
+    "default": 500
+  }
+}

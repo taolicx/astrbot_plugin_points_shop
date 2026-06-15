@@ -1,0 +1,12 @@
+目录内容：
+
+- main.py：AstrBot 插件主逻辑。
+- _conf_schema.json：AstrBot 插件配置面板 schema。
+- metadata.yaml：插件元信息。
+- README.md：安装、配置和指令说明。
+- requirements.txt：图片海报依赖 Pillow。
+- data/：运行时状态与商城海报缓存目录。
+
+使用方式：
+
+将整个 astrbot_plugin_points_shop 文件夹放入 AstrBot 插件目录，安装 requirements.txt 后在面板启用。
