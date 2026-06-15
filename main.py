@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.2"
+PLUGIN_VERSION = "0.1.3"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 
 MOVE_ALIASES = {
@@ -88,6 +88,22 @@ class PointsShopPlugin(Star):
     async def terminate(self):
         await asyncio.to_thread(self._save_state)
         logger.info("[PointsShop] terminated")
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=90)
+    async def group_text_entry(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_group_event(event):
+            return
+        if self._looks_like_explicit_command(event):
+            return
+
+        handler = self._match_group_text_handler(event)
+        if handler is None:
+            return
+
+        await handler(event)
+        event.stop_event()
 
     @filter.command("签到", alias={"打卡", "每日签到"}, priority=100)
     async def sign_in(self, event: AstrMessageEvent):
@@ -839,13 +855,14 @@ class PointsShopPlugin(Star):
     def _help_text(self) -> str:
         return (
             "积分兑换系统指令：\n"
-            "/签到 - 每日签到领取积分\n"
-            "/积分 - 查看当前积分\n"
-            "/积分排行 - 查看本群排行榜\n"
-            f"/猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，当前胜率 {self._rps_win_rate()}%\n"
-            "/商店 - 查看精美商品图\n"
-            "/兑换 <商品ID或名称> [数量] - 消耗积分兑换\n"
-            "/兑换记录 - 查看最近订单"
+            "签到 - 每日签到领取积分\n"
+            "积分 - 查看当前积分\n"
+            "积分排行 - 查看本群排行榜\n"
+            f"猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，当前胜率 {self._rps_win_rate()}%\n"
+            "商店 - 查看精美商品图\n"
+            "兑换 <商品ID或名称> [数量] - 消耗积分兑换\n"
+            "兑换记录 - 查看最近订单\n"
+            "以上指令可直接发纯文字，也兼容 /前缀。"
         )
 
     def _remember_user(self, event: AstrMessageEvent) -> None:
@@ -869,6 +886,62 @@ class PointsShopPlugin(Star):
                     return ""
                 if text.startswith(mark):
                     return text[len(mark) :].strip()
+        return text
+
+    def _looks_like_explicit_command(self, event: AstrMessageEvent) -> bool:
+        text = str(getattr(event, "message_str", "") or "").strip()
+        return text.startswith("/") or text.startswith("／")
+
+    def _match_group_text_handler(self, event: AstrMessageEvent):
+        text = self._normalized_text(event)
+        if not text:
+            return None
+
+        exact_handlers = {
+            "签到": self.sign_in,
+            "打卡": self.sign_in,
+            "每日签到": self.sign_in,
+            "积分": self.show_points,
+            "我的积分": self.show_points,
+            "余额": self.show_points,
+            "积分排行": self.leaderboard,
+            "排行榜": self.leaderboard,
+            "积分榜": self.leaderboard,
+            "商店": self.shop,
+            "兑换商城": self.shop,
+            "积分商城": self.shop,
+            "商品列表": self.shop,
+            "兑换列表": self.shop,
+            "兑换记录": self.exchange_records,
+            "我的兑换": self.exchange_records,
+            "订单": self.exchange_records,
+            "积分帮助": self.help_text,
+            "兑换帮助": self.help_text,
+            "商店帮助": self.help_text,
+        }
+        if text in exact_handlers:
+            return exact_handlers[text]
+
+        prefix_handlers = (
+            ("猜拳", self.rps),
+            ("剪刀石头布", self.rps),
+            ("石头剪刀布", self.rps),
+            ("划拳", self.rps),
+            ("兑换", self.exchange),
+            ("购买", self.exchange),
+            ("积分兑换", self.exchange),
+            ("积分管理", self.manage_points),
+            ("积分调整", self.manage_points),
+        )
+        for prefix, handler in prefix_handlers:
+            if text == prefix or text.startswith(prefix + " "):
+                return handler
+        return None
+
+    def _normalized_text(self, event: AstrMessageEvent) -> str:
+        text = str(getattr(event, "message_str", "") or "").strip()
+        text = text.replace("\u3000", " ")
+        text = re.sub(r"\s+", " ", text)
         return text
 
     def _is_group_event(self, event: AstrMessageEvent) -> bool:
