@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.1"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 
 MOVE_ALIASES = {
@@ -57,6 +57,7 @@ WIN_MAP = {
     "scissors": "paper",
     "paper": "rock",
 }
+LOSE_MAP = {loser: winner for winner, loser in WIN_MAP.items()}
 
 
 @register(
@@ -201,7 +202,7 @@ class PointsShopPlugin(Star):
                 return
 
             self._add_points(group_sid, user_id, -bet)
-            bot_move = random.choice(("rock", "scissors", "paper"))
+            bot_move = self._choose_rps_bot_move(move)
             if move == bot_move:
                 self._add_points(group_sid, user_id, bet)
                 result = "平局，本金已返还。"
@@ -787,6 +788,16 @@ class PointsShopPlugin(Star):
                 bet = int(part)
         return move, bet
 
+    def _choose_rps_bot_move(self, player_move: str) -> str:
+        win_rate = self._rps_win_rate()
+        draw_rate = self._rps_draw_rate()
+        roll = random.uniform(0, 100)
+        if roll < win_rate:
+            return WIN_MAP[player_move]
+        if roll < win_rate + draw_rate:
+            return player_move
+        return LOSE_MAP[player_move]
+
     def _parse_exchange_payload(self, payload: str) -> tuple[str, int]:
         payload = payload.strip()
         if not payload:
@@ -831,7 +842,7 @@ class PointsShopPlugin(Star):
             "/签到 - 每日签到领取积分\n"
             "/积分 - 查看当前积分\n"
             "/积分排行 - 查看本群排行榜\n"
-            f"/猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}\n"
+            f"/猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，当前胜率 {self._rps_win_rate()}%\n"
             "/商店 - 查看精美商品图\n"
             "/兑换 <商品ID或名称> [数量] - 消耗积分兑换\n"
             "/兑换记录 - 查看最近订单"
@@ -928,6 +939,15 @@ class PointsShopPlugin(Star):
 
     def _max_bet(self) -> int:
         return max(self._min_bet(), self._cfg_int("max_bet", 100))
+
+    def _rps_win_rate(self) -> int:
+        return self._percent(self._cfg_int("rps_win_rate", 33))
+
+    def _rps_draw_rate(self) -> int:
+        return min(self._percent(self._cfg_int("rps_draw_rate", 33)), max(0, 100 - self._rps_win_rate()))
+
+    def _percent(self, value: int) -> int:
+        return max(0, min(100, int(value)))
 
     def _cfg_str(self, key: str, default: str = "") -> str:
         return str(self.config.get(key, default) if self.config.get(key, None) is not None else default)
