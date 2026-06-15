@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.1"
+PLUGIN_VERSION = "0.1.2"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 
 MOVE_ALIASES = {
@@ -872,9 +872,26 @@ class PointsShopPlugin(Star):
         return text
 
     def _is_group_event(self, event: AstrMessageEvent) -> bool:
-        if getattr(event, "message_obj", None) is not None:
-            return str(getattr(event.message_obj, "type", "")) == GROUP_MESSAGE_TYPE
-        return bool(getattr(event, "get_group_id", lambda: "")())
+        try:
+            if event.get_group_id():
+                return True
+        except Exception:
+            pass
+
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        if f":{GROUP_MESSAGE_TYPE}:" in umo or ":group:" in umo.lower():
+            return True
+
+        message_obj = getattr(event, "message_obj", None)
+        if message_obj is None:
+            return False
+
+        for attr in ("type", "message_type", "event_type"):
+            value = str(getattr(message_obj, attr, "") or "")
+            if value == GROUP_MESSAGE_TYPE or value.lower() in {"group", "groupmessage", "group_message"}:
+                return True
+
+        return bool(getattr(message_obj, "group_id", "") or getattr(message_obj, "group", ""))
 
     def _group_sid(self, event: AstrMessageEvent) -> str:
         umo = str(getattr(event, "unified_msg_origin", "") or "")
