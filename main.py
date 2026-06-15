@@ -25,8 +25,9 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.3"
+PLUGIN_VERSION = "0.1.4"
 GROUP_MESSAGE_TYPE = "GroupMessage"
+FRIEND_MESSAGE_TYPE = "FriendMessage"
 
 MOVE_ALIASES = {
     "石头": "rock",
@@ -119,7 +120,8 @@ class PointsShopPlugin(Star):
             self._remember_user(event)
 
             today = datetime.now().strftime("%Y-%m-%d")
-            last_day = self.state.setdefault("signins", {}).setdefault(group_sid, {}).get(user_id)
+            signins = self.state.setdefault("signins", {})
+            last_day = str(signins.get(user_id) or "")
             if last_day == today:
                 balance = self._balance(group_sid, user_id)
                 await self._reply_and_stop(event, f"今天已经签到过啦。\n当前积分：{balance}")
@@ -132,23 +134,19 @@ class PointsShopPlugin(Star):
             bonus = self._streak_bonus(streak)
             total = reward + bonus
 
-            self.state["signins"][group_sid][user_id] = today
+            signins[user_id] = today
             self._set_streak(group_sid, user_id, streak, today)
             balance = self._add_points(group_sid, user_id, total)
             self._save_state()
 
         bonus_text = f"\n连续签到奖励：+{bonus}" if bonus else ""
-        await self._reply_and_stop(
-            event,
-            f"签到成功，获得 {total} 积分！{bonus_text}\n连续签到：{streak} 天\n当前积分：{balance}",
-        )
-
+        await self._reply_and_stop(event, f"签到成功，获得 {total} 积分！{bonus_text}\n连续签到：{streak} 天\n当前积分：{balance}")
     @filter.command("积分", alias={"我的积分", "余额"}, priority=100)
     async def show_points(self, event: AstrMessageEvent):
         if not self._enabled():
             return
         if not self._is_group_event(event):
-            await self._reply_and_stop(event, "积分按群聊分别统计，请在群聊里查看。")
+            await self._reply_and_stop(event, "积分查询需要在群聊里进行。")
             return
 
         async with self._lock:
@@ -156,10 +154,9 @@ class PointsShopPlugin(Star):
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
             balance = self._balance(group_sid, user_id)
-            streak = self.state.setdefault("streaks", {}).setdefault(group_sid, {}).get(user_id, {}).get("days", 0)
+            streak = self.state.setdefault("streaks", {}).get(user_id, {}).get("days", 0)
 
         await self._reply_and_stop(event, f"{self._sender_name(event)}\n当前积分：{balance}\n连续签到：{streak} 天")
-
     @filter.command("积分排行", alias={"排行榜", "积分榜"}, priority=100)
     async def leaderboard(self, event: AstrMessageEvent):
         if not self._enabled():
@@ -168,23 +165,21 @@ class PointsShopPlugin(Star):
             await self._reply_and_stop(event, "积分排行需要在群聊里查看。")
             return
 
-        group_sid = self._group_sid(event)
         async with self._lock:
-            balances = dict(self.state.setdefault("balances", {}).get(group_sid, {}))
-            profiles = self.state.setdefault("profiles", {}).get(group_sid, {})
+            balances = dict(self.state.setdefault("balances", {}))
+            profiles = dict(self.state.setdefault("profiles", {}))
 
         if not balances:
-            await self._reply_and_stop(event, "本群还没有积分记录，先发 /签到 开始积累吧。")
+            await self._reply_and_stop(event, "还没有积分记录，先发 签到 开始积累吧。")
             return
 
         limit = max(3, min(20, self._cfg_int("leaderboard_limit", 10)))
         rows = sorted(balances.items(), key=lambda item: int(item[1] or 0), reverse=True)[:limit]
-        lines = ["本群积分排行："]
+        lines = ["全局积分排行："]
         for index, (user_id, points) in enumerate(rows, start=1):
             name = str(profiles.get(user_id, {}).get("name") or user_id)
             lines.append(f"{index}. {name} - {int(points)}")
         await self._reply_and_stop(event, "\n".join(lines))
-
     @filter.command("猜拳", alias={"剪刀石头布", "石头剪刀布", "划拳"}, priority=100)
     async def rps(self, event: AstrMessageEvent):
         if not self._enabled():
@@ -198,7 +193,7 @@ class PointsShopPlugin(Star):
         if not move or bet is None:
             await self._reply_and_stop(
                 event,
-                f"用法：/猜拳 <石头|剪刀|布> <积分>\n下注范围：{self._min_bet()}~{self._max_bet()} 积分",
+                f"用法：猜拳 <石头|剪刀|布> <积分>\n下注范围：{self._min_bet()}~{self._max_bet()} 积分",
             )
             return
 
@@ -242,7 +237,6 @@ class PointsShopPlugin(Star):
             f"我出了 {MOVE_ICONS[bot_move]} {MOVE_LABELS[bot_move]}\n"
             f"{result}\n当前积分：{new_balance}",
         )
-
     @filter.command("兑换商城", alias={"商店", "积分商城", "商品列表", "兑换列表"}, priority=100)
     async def shop(self, event: AstrMessageEvent):
         if not self._enabled():
@@ -271,14 +265,13 @@ class PointsShopPlugin(Star):
             await asyncio.to_thread(self._render_shop_poster, items, stocks, balance, self._sender_name(event))
             chain = [
                 self._image_component(self.poster_path),
-                Comp.Plain(text=f"\n当前积分：{balance}\n发送 /兑换 <商品ID或名称> [数量] 进行兑换。"),
+                Comp.Plain(text=f"\n当前积分：{balance}\n发送 兑换 <商品ID或名称> [数量] 进行兑换。"),
             ]
             await event.send(MessageChain(chain))
             event.stop_event()
         except Exception as exc:
             logger.exception(f"[PointsShop] render shop poster failed: {exc}")
             await self._reply_and_stop(event, self._shop_text(items, stocks, balance))
-
     @filter.command("兑换", alias={"购买", "积分兑换"}, priority=100)
     async def exchange(self, event: AstrMessageEvent):
         if not self._enabled():
@@ -290,17 +283,18 @@ class PointsShopPlugin(Star):
         payload = self._command_payload(event, ("兑换", "购买", "积分兑换"))
         item_key, qty = self._parse_exchange_payload(payload)
         if not item_key:
-            await self._reply_and_stop(event, "用法：/兑换 <商品ID或名称> [数量]\n发送 /商店 查看可兑换商品。")
+            await self._reply_and_stop(event, "用法：兑换 <商品ID或名称> [数量]\n发送 商店 查看可兑换商品。")
             return
 
         qty = max(1, qty)
+        reward_entries: list[dict[str, Any]] = []
         async with self._lock:
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
             self._remember_user(event)
             item = self._find_item(item_key)
             if not item:
-                await self._reply_and_stop(event, "没有找到这个商品。发送 /商店 查看商品ID和名称。")
+                await self._reply_and_stop(event, "没有找到这个商品。发送 商店 查看商品 ID 和名称。")
                 return
 
             item_id = str(item.get("id") or "")
@@ -320,12 +314,38 @@ class PointsShopPlugin(Star):
                 await self._reply_and_stop(event, f"库存不足，当前剩余：{stock}")
                 return
 
+            if self._reward_mode(item) == "pool":
+                pool = self._reward_pool(item_id)
+                if len(pool) < qty:
+                    await self._reply_and_stop(event, f"该商品的奖励仓库不足，当前可发送：{len(pool)}")
+                    return
+
             self._add_points(group_sid, user_id, -cost)
             if stock >= 0:
                 self.state.setdefault("stock", {})[item_id] = stock - qty
+            if self._reward_mode(item) == "pool":
+                pool = self._reward_pool(item_id)
+                reward_entries = [pool.pop(0) for _ in range(qty)]
             record = self._append_exchange_record(event, item, qty, cost)
             new_balance = self._balance(group_sid, user_id)
             self._save_state()
+
+        private_ok = True
+        if reward_entries:
+            private_ok = await self._send_reward_private(event, item, record, reward_entries)
+
+        if reward_entries:
+            private_text = "奖励已私发，请查收私聊。" if private_ok else "奖励发送失败，请联系管理员补发。"
+            await self._reply_and_stop(
+                event,
+                f"兑换成功！\n"
+                f"商品：{item.get('name')} x{qty}\n"
+                f"消耗：{cost} 积分\n"
+                f"订单号：{record['order_id']}\n"
+                f"{private_text}\n"
+                f"剩余积分：{new_balance}",
+            )
+            return
 
         delivery = str(item.get("delivery") or "").strip()
         delivery_text = f"\n兑换说明：{delivery}" if delivery else ""
@@ -337,7 +357,6 @@ class PointsShopPlugin(Star):
             f"订单号：{record['order_id']}\n"
             f"剩余积分：{new_balance}{delivery_text}",
         )
-
     @filter.command("兑换记录", alias={"我的兑换", "订单"}, priority=100)
     async def exchange_records(self, event: AstrMessageEvent):
         if not self._enabled():
@@ -346,13 +365,13 @@ class PointsShopPlugin(Star):
             await self._reply_and_stop(event, "兑换记录需要在群聊里查看。")
             return
 
-        group_sid = self._group_sid(event)
         user_id = self._sender_id(event)
+        platform_id = event.get_platform_id()
         async with self._lock:
             records = [
                 item
                 for item in self.state.setdefault("exchange_records", [])
-                if item.get("group_sid") == group_sid and item.get("user_id") == user_id
+                if item.get("platform_id") == platform_id and item.get("user_id") == user_id
             ][-5:]
 
         if not records:
@@ -366,7 +385,6 @@ class PointsShopPlugin(Star):
                 f"{item.get('cost')}积分 | {item.get('order_id')}"
             )
         await self._reply_and_stop(event, "\n".join(lines))
-
     @filter.command("积分帮助", alias={"兑换帮助", "商店帮助"}, priority=100)
     async def help_text(self, event: AstrMessageEvent):
         if not self._enabled():
@@ -386,16 +404,91 @@ class PointsShopPlugin(Star):
         payload = self._command_payload(event, ("积分管理", "积分调整"))
         target_id, delta = self._parse_adjust_payload(event, payload)
         if not target_id or delta is None:
-            await self._reply_and_stop(event, "用法：/积分管理 <用户ID或@用户> <+/-积分>\n例：/积分管理 123456 +50")
+            await self._reply_and_stop(event, "用法：积分管理 <用户ID或@用户> <+/-积分>\n例：积分管理 123456 +50")
             return
 
         async with self._lock:
-            group_sid = self._group_sid(event)
-            new_balance = self._add_points(group_sid, target_id, delta)
+            new_balance = self._add_points(self._group_sid(event), target_id, delta)
             self._save_state()
 
         await self._reply_and_stop(event, f"已调整积分：{target_id} {delta:+d}\n当前积分：{new_balance}")
 
+    @filter.command("奖励入库", alias={"入库奖励", "兑换入库"}, priority=100)
+    async def reward_pool_add(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_admin(event):
+            await self._reply_and_stop(event, "只有管理员可以添加奖励。")
+            return
+
+        payload = self._command_payload(event, ("奖励入库", "入库奖励", "兑换入库"))
+        item_key, kind, content, note = self._parse_reward_pool_add_payload(payload)
+        if kind == "image" and not content:
+            content = self._extract_first_image_ref(event)
+        if not item_key or not kind or not content:
+            await self._reply_and_stop(
+                event,
+                "用法：奖励入库 <商品ID> <文本|图片> <内容> [| 备注]\n"
+                "例：奖励入库 mystery 文本 ABCD-EFGH-IJKL\n"
+                "例：奖励入库 mystery 图片 https://example.com/code.png | 第一批兑换码\n"
+                "也支持附带一张图片后发送：奖励入库 mystery 图片 | 二维码奖励",
+            )
+            return
+
+        async with self._lock:
+            item = self._find_item(item_key)
+            if not item:
+                await self._reply_and_stop(event, "没有找到这个商品。")
+                return
+            if self._reward_mode(item) != "pool":
+                await self._reply_and_stop(event, "这个商品当前不是仓库发货模式，请先把 reward_mode 设置为 pool。")
+                return
+
+            item_id = str(item.get("id") or "")
+            entry = self._make_reward_entry(kind, content, note)
+            pool = self._reward_pool(item_id)
+            pool.append(entry)
+            count = len(pool)
+            self._save_state()
+
+        kind_label = "图片" if kind == "image" else "文本"
+        await self._reply_and_stop(event, f"已入库：{item.get('name')}\n类型：{kind_label}\n当前库存：{count}")
+
+    @filter.command("奖励仓库", alias={"兑换仓库", "奖励列表"}, priority=100)
+    async def reward_pool_list(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_admin(event):
+            await self._reply_and_stop(event, "只有管理员可以查看奖励仓库。")
+            return
+
+        payload = self._command_payload(event, ("奖励仓库", "兑换仓库", "奖励列表"))
+        item_key = str(payload or "").strip()
+        async with self._lock:
+            if item_key:
+                item = self._find_item(item_key)
+                if not item:
+                    await self._reply_and_stop(event, "没有找到这个商品。")
+                    return
+                item_id = str(item.get("id") or "")
+                pool = list(self._reward_pool(item_id))
+                lines = [f"{item.get('name')} 奖励仓库：共 {len(pool)} 条"]
+                for index, entry in enumerate(pool[:10], start=1):
+                    preview = self._format_reward_entry(entry).replace("\n", " | ")
+                    if len(preview) > 60:
+                        preview = preview[:60] + "..."
+                    lines.append(f"{index}. {preview}")
+                if len(pool) > 10:
+                    lines.append(f"... 其余 {len(pool) - 10} 条未展开")
+                await self._reply_and_stop(event, "\n".join(lines))
+                return
+
+            lines = ["当前各商品奖励仓库："]
+            for item in self._items():
+                item_id = str(item.get("id") or "")
+                mode_label = "仓库私发" if self._reward_mode(item) == "pool" else "手动核销"
+                lines.append(f"{item.get('name')} [{item_id}] - {len(self._reward_pool(item_id))} 条 - 模式：{mode_label}")
+            await self._reply_and_stop(event, "\n".join(lines))
     def _default_state(self) -> dict[str, Any]:
         return {
             "balances": {},
@@ -403,10 +496,10 @@ class PointsShopPlugin(Star):
             "signins": {},
             "streaks": {},
             "stock": {},
+            "reward_pool": {},
             "exchange_records": [],
             "game_records": [],
         }
-
     def _load_state(self) -> None:
         self.state = self._default_state()
         if not self.state_path.exists():
@@ -416,9 +509,94 @@ class PointsShopPlugin(Star):
             if isinstance(raw, dict):
                 for key, value in raw.items():
                     self.state[key] = value
+            self._migrate_legacy_state()
         except Exception as exc:
             logger.warning(f"[PointsShop] load state failed: {exc}")
 
+    def _migrate_legacy_state(self) -> None:
+        self.state["balances"] = self._merge_balance_state(self.state.get("balances"))
+        self.state["signins"] = self._merge_signin_state(self.state.get("signins"))
+        self.state["streaks"] = self._merge_streak_state(self.state.get("streaks"))
+        self.state["profiles"] = self._merge_profile_state(self.state.get("profiles"))
+        reward_pool = self.state.setdefault("reward_pool", {})
+        if not isinstance(reward_pool, dict):
+            self.state["reward_pool"] = {}
+
+    def _merge_balance_state(self, raw: Any) -> dict[str, int]:
+        merged: dict[str, int] = {}
+        if not isinstance(raw, dict):
+            return merged
+        for key, value in raw.items():
+            if isinstance(value, dict):
+                for user_id, points in value.items():
+                    uid = str(user_id)
+                    merged[uid] = max(0, merged.get(uid, 0) + int(points or 0))
+            else:
+                uid = str(key)
+                merged[uid] = max(0, int(value or 0))
+        return merged
+
+    def _merge_signin_state(self, raw: Any) -> dict[str, str]:
+        merged: dict[str, str] = {}
+        if not isinstance(raw, dict):
+            return merged
+        for key, value in raw.items():
+            if isinstance(value, dict):
+                for user_id, last_day in value.items():
+                    uid = str(user_id)
+                    day = str(last_day or "")
+                    if day and day > merged.get(uid, ""):
+                        merged[uid] = day
+            else:
+                uid = str(key)
+                day = str(value or "")
+                if day and day > merged.get(uid, ""):
+                    merged[uid] = day
+        return merged
+
+    def _merge_streak_state(self, raw: Any) -> dict[str, dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        if not isinstance(raw, dict):
+            return merged
+        for key, value in raw.items():
+            if isinstance(value, dict) and ("days" in value or "last_day" in value):
+                self._merge_one_streak_entry(merged, str(key), value)
+            elif isinstance(value, dict):
+                for user_id, entry in value.items():
+                    if isinstance(entry, dict):
+                        self._merge_one_streak_entry(merged, str(user_id), entry)
+        return merged
+
+    def _merge_one_streak_entry(self, merged: dict[str, dict[str, Any]], user_id: str, entry: dict[str, Any]) -> None:
+        candidate = {"days": max(0, int(entry.get("days") or 0)), "last_day": str(entry.get("last_day") or "")}
+        current = merged.get(user_id)
+        if current is None:
+            merged[user_id] = candidate
+            return
+        if candidate["last_day"] > str(current.get("last_day") or ""):
+            merged[user_id] = candidate
+            return
+        if candidate["last_day"] == str(current.get("last_day") or "") and candidate["days"] > int(current.get("days") or 0):
+            merged[user_id] = candidate
+
+    def _merge_profile_state(self, raw: Any) -> dict[str, dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        if not isinstance(raw, dict):
+            return merged
+        for key, value in raw.items():
+            if isinstance(value, dict) and ("name" in value or "updated_at" in value):
+                self._merge_one_profile_entry(merged, str(key), value)
+            elif isinstance(value, dict):
+                for user_id, entry in value.items():
+                    if isinstance(entry, dict):
+                        self._merge_one_profile_entry(merged, str(user_id), entry)
+        return merged
+
+    def _merge_one_profile_entry(self, merged: dict[str, dict[str, Any]], user_id: str, entry: dict[str, Any]) -> None:
+        candidate = {"name": str(entry.get("name") or user_id), "updated_at": str(entry.get("updated_at") or "")}
+        current = merged.get(user_id)
+        if current is None or candidate["updated_at"] >= str(current.get("updated_at") or ""):
+            merged[user_id] = candidate
     def _save_state(self) -> None:
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -428,6 +606,7 @@ class PointsShopPlugin(Star):
 
     def _sync_stock_from_config(self) -> None:
         stock_map = self.state.setdefault("stock", {})
+        reward_pool = self.state.setdefault("reward_pool", {})
         for item in self._items():
             item_id = str(item.get("id") or "").strip()
             if not item_id:
@@ -437,7 +616,7 @@ class PointsShopPlugin(Star):
                 stock_map[item_id] = configured
             elif configured < 0:
                 stock_map[item_id] = -1
-
+            reward_pool.setdefault(item_id, [])
     def _items(self) -> list[dict[str, Any]]:
         raw = self.config.get("items")
         if not isinstance(raw, list):
@@ -450,6 +629,9 @@ class PointsShopPlugin(Star):
             name = str(item.get("name") or f"商品{index}").strip()
             price = max(1, int(item.get("price") or 1))
             enabled = self._to_bool(item.get("enabled", True), True)
+            reward_mode = str(item.get("reward_mode") or "manual").strip().lower()
+            if reward_mode not in {"manual", "pool"}:
+                reward_mode = "manual"
             if not item_id or not name or not enabled:
                 continue
             items.append(
@@ -462,6 +644,7 @@ class PointsShopPlugin(Star):
                     "delivery": str(item.get("delivery") or "").strip(),
                     "emoji": str(item.get("emoji") or "🎁").strip()[:4],
                     "color": str(item.get("color") or "").strip(),
+                    "reward_mode": reward_mode,
                     "enabled": True,
                 }
             )
@@ -478,6 +661,7 @@ class PointsShopPlugin(Star):
                 "description": "给自己兑换一杯精神补给",
                 "delivery": "请联系管理员核销。",
                 "color": "#6f4e37",
+                "reward_mode": "manual",
                 "enabled": True,
             },
             {
@@ -489,6 +673,7 @@ class PointsShopPlugin(Star):
                 "description": "兑换一次群头衔/称号修改",
                 "delivery": "兑换后把想要的头衔发给管理员。",
                 "color": "#4f46e5",
+                "reward_mode": "manual",
                 "enabled": True,
             },
             {
@@ -498,12 +683,12 @@ class PointsShopPlugin(Star):
                 "stock": 3,
                 "emoji": "🎁",
                 "description": "随机小奖励，开盒有惊喜",
-                "delivery": "管理员会在群内公布盲盒结果。",
+                "delivery": "奖励会通过私聊自动发放。",
                 "color": "#db2777",
+                "reward_mode": "pool",
                 "enabled": True,
             },
         ]
-
     def _find_item(self, key: str) -> dict[str, Any] | None:
         normalized = key.strip().lower()
         if not normalized:
@@ -528,17 +713,17 @@ class PointsShopPlugin(Star):
             return configured
 
     def _balance(self, group_sid: str, user_id: str) -> int:
-        return int(self.state.setdefault("balances", {}).setdefault(group_sid, {}).get(user_id, 0) or 0)
+        return int(self.state.setdefault("balances", {}).setdefault(user_id, 0) or 0)
 
     def _add_points(self, group_sid: str, user_id: str, delta: int) -> int:
-        balances = self.state.setdefault("balances", {}).setdefault(group_sid, {})
+        balances = self.state.setdefault("balances", {})
         current = int(balances.get(user_id, 0) or 0)
         next_value = max(0, current + int(delta))
         balances[user_id] = next_value
         return next_value
 
     def _next_streak(self, group_sid: str, user_id: str, today: str) -> int:
-        streaks = self.state.setdefault("streaks", {}).setdefault(group_sid, {})
+        streaks = self.state.setdefault("streaks", {})
         old = streaks.get(user_id, {})
         old_day = str(old.get("last_day") or "")
         old_days = int(old.get("days") or 0)
@@ -550,11 +735,7 @@ class PointsShopPlugin(Star):
         return 1
 
     def _set_streak(self, group_sid: str, user_id: str, days: int, today: str) -> None:
-        self.state.setdefault("streaks", {}).setdefault(group_sid, {})[user_id] = {
-            "days": int(days),
-            "last_day": today,
-        }
-
+        self.state.setdefault("streaks", {})[user_id] = {"days": int(days), "last_day": today}
     def _streak_bonus(self, streak: int) -> int:
         every = max(0, self._cfg_int("streak_bonus_every_days", 7))
         bonus = max(0, self._cfg_int("streak_bonus_points", 20))
@@ -829,6 +1010,110 @@ class PointsShopPlugin(Star):
             key = " ".join(parts)
         return key.strip(), qty
 
+    def _reward_mode(self, item: dict[str, Any]) -> str:
+        mode = str(item.get("reward_mode") or "manual").strip().lower()
+        return mode if mode in {"manual", "pool"} else "manual"
+
+    def _reward_pool(self, item_id: str) -> list[dict[str, Any]]:
+        reward_pool = self.state.setdefault("reward_pool", {})
+        pool = reward_pool.setdefault(str(item_id), [])
+        if not isinstance(pool, list):
+            pool = []
+            reward_pool[str(item_id)] = pool
+        return pool
+
+    def _make_reward_entry(self, kind: str, payload: str, note: str = "") -> dict[str, Any]:
+        kind = str(kind or "text").strip().lower()
+        payload = str(payload or "").strip()
+        note = str(note or "").strip()
+        if kind not in {"text", "image"}:
+            kind = "text"
+        return {"kind": kind, "payload": payload, "note": note, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+    def _format_reward_entry(self, entry: dict[str, Any]) -> str:
+        kind = str(entry.get("kind") or "text").lower()
+        payload = str(entry.get("payload") or "")
+        note = str(entry.get("note") or "")
+        text = f"[图片]\n{payload}" if kind == "image" else payload
+        if note:
+            text = f"{text}\n{note}"
+        return text
+
+    async def _send_reward_private(self, event: AstrMessageEvent, item: dict[str, Any], record: dict[str, Any], reward_entries: list[dict[str, Any]]) -> bool:
+        private_sid = self._private_sid(event.get_platform_id(), self._sender_id(event))
+        lines = ["你兑换到的奖励：", f"商品：{item.get('name')}", f"订单号：{record.get('order_id')}", ""]
+        for entry in reward_entries:
+            if str(entry.get("kind") or "text").lower() == "image":
+                payload = str(entry.get("payload") or "").strip()
+                image = self._image_component_from_ref(payload)
+                if image is not None:
+                    caption_lines = list(lines)
+                    caption_lines.append(str(entry.get("note") or "").strip() or "图片奖励")
+                    try:
+                        caption = "\n".join(part for part in caption_lines if part)
+                        chain = [image] if not caption else [Comp.Plain(text=caption), image]
+                        sent = await self.context.send_message(private_sid, MessageChain(chain))
+                        if not sent:
+                            logger.warning(f"[PointsShop] private image reward send returned false: {private_sid}")
+                            raise RuntimeError("private image reward send returned false")
+                        lines = []
+                        continue
+                    except Exception as exc:
+                        logger.warning(f"[PointsShop] private image reward send failed: {exc}")
+                lines.append(self._format_reward_entry(entry))
+            else:
+                lines.append(self._format_reward_entry(entry))
+            lines.append("")
+        if lines:
+            try:
+                sent = await self.context.send_message(private_sid, MessageChain([Comp.Plain(text="\n".join(part for part in lines if part))]))
+                if not sent:
+                    logger.warning(f"[PointsShop] private reward send returned false: {private_sid}")
+                    return False
+                return True
+            except Exception as exc:
+                logger.warning(f"[PointsShop] private reward send failed: {private_sid}, {exc}")
+                return False
+        return True
+    def _image_component_from_ref(self, image_ref: str):
+        ref = str(image_ref or "").strip()
+        if not ref:
+            return None
+        try:
+            if ref.startswith("http://") or ref.startswith("https://"):
+                return Comp.Image.fromURL(ref)
+            if ref.startswith("base64://"):
+                return Comp.Image.fromBase64(ref.removeprefix("base64://"))
+            if ref.startswith("data:image") and "," in ref:
+                return Comp.Image.fromBase64(ref.split(",", 1)[1])
+            if ref.startswith("file:///"):
+                return Comp.Image(file=ref, path=ref.removeprefix("file:///"))
+            path = Path(ref)
+            if path.exists():
+                return Comp.Image.fromFileSystem(str(path))
+            return Comp.Image(file=ref)
+        except Exception as exc:
+            logger.warning(f"[PointsShop] image ref ignored: {ref}, {exc}")
+            return None
+
+    def _parse_reward_pool_add_payload(self, payload: str) -> tuple[str, str, str, str]:
+        payload = str(payload or "").strip()
+        if not payload:
+            return "", "", "", ""
+        note = ""
+        if "|" in payload:
+            payload, note = payload.split("|", 1)
+            payload = payload.strip()
+            note = note.strip()
+        parts = [part for part in re.split(r"\s+", payload) if part]
+        if len(parts) < 2:
+            return "", "", "", note
+        item_key = parts[0].strip()
+        raw_kind = parts[1].strip().lower()
+        kind_map = {"文本": "text", "文字": "text", "text": "text", "txt": "text", "图片": "image", "图像": "image", "image": "image", "img": "image"}
+        kind = kind_map.get(raw_kind, "")
+        content = " ".join(parts[2:]).strip()
+        return item_key, kind, content, note
     def _parse_adjust_payload(self, event: AstrMessageEvent, payload: str) -> tuple[str, int | None]:
         at_user = self._extract_at_user(event)
         parts = [part for part in re.split(r"\s+", payload.strip()) if part]
@@ -852,23 +1137,41 @@ class PointsShopPlugin(Star):
             return ""
         return ""
 
+    def _extract_first_image_ref(self, event: AstrMessageEvent) -> str:
+        try:
+            message = getattr(getattr(event, "message_obj", None), "message", []) or []
+            for comp in message:
+                if getattr(comp, "type", "") != "Image":
+                    continue
+                for attr in ("url", "file", "path", "imageUrl"):
+                    value = str(getattr(comp, attr, "") or "").strip()
+                    if value:
+                        return value
+                data = str(getattr(comp, "base64", "") or getattr(comp, "data", "") or "").strip()
+                if data:
+                    return f"base64://{data}"
+        except Exception:
+            return ""
+        return ""
     def _help_text(self) -> str:
         return (
             "积分兑换系统指令：\n"
-            "签到 - 每日签到领取积分\n"
-            "积分 - 查看当前积分\n"
-            "积分排行 - 查看本群排行榜\n"
+            "签到 - 每日签到领取积分（所有群聊共享积分）\n"
+            "积分 - 查看当前积分余额\n"
+            "积分排行 - 查看全局积分排行榜\n"
             f"猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，当前胜率 {self._rps_win_rate()}%\n"
             "商店 - 查看精美商品图\n"
             "兑换 <商品ID或名称> [数量] - 消耗积分兑换\n"
             "兑换记录 - 查看最近订单\n"
-            "以上指令可直接发纯文字，也兼容 /前缀。"
+            "奖励入库 <商品ID> <文本|图片> <内容> [| 备注] - 管理员向奖励仓库入库\n"
+            "奖励仓库 [商品ID] - 管理员查看奖励仓库\n"
+            "仓库发货商品兑换后会在群里提示，奖励内容通过私聊发送。\n"
+            "以上指令可直接发纯文字，也兼容 / 前缀。"
         )
 
     def _remember_user(self, event: AstrMessageEvent) -> None:
-        group_sid = self._group_sid(event)
         user_id = self._sender_id(event)
-        self.state.setdefault("profiles", {}).setdefault(group_sid, {})[user_id] = {
+        self.state.setdefault("profiles", {})[user_id] = {
             "name": self._sender_name(event),
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -918,6 +1221,9 @@ class PointsShopPlugin(Star):
             "积分帮助": self.help_text,
             "兑换帮助": self.help_text,
             "商店帮助": self.help_text,
+            "奖励仓库": self.reward_pool_list,
+            "兑换仓库": self.reward_pool_list,
+            "奖励列表": self.reward_pool_list,
         }
         if text in exact_handlers:
             return exact_handlers[text]
@@ -932,12 +1238,17 @@ class PointsShopPlugin(Star):
             ("积分兑换", self.exchange),
             ("积分管理", self.manage_points),
             ("积分调整", self.manage_points),
+            ("奖励入库", self.reward_pool_add),
+            ("入库奖励", self.reward_pool_add),
+            ("兑换入库", self.reward_pool_add),
+            ("奖励仓库", self.reward_pool_list),
+            ("兑换仓库", self.reward_pool_list),
+            ("奖励列表", self.reward_pool_list),
         )
         for prefix, handler in prefix_handlers:
             if text == prefix or text.startswith(prefix + " "):
                 return handler
         return None
-
     def _normalized_text(self, event: AstrMessageEvent) -> str:
         text = str(getattr(event, "message_str", "") or "").strip()
         text = text.replace("\u3000", " ")
@@ -974,6 +1285,8 @@ class PointsShopPlugin(Star):
         group_id = self._group_id(event)
         return f"{platform}:GroupMessage:{group_id}"
 
+    def _private_sid(self, platform_id: str, user_id: str) -> str:
+        return f"{platform_id}:{FRIEND_MESSAGE_TYPE}:{user_id}"
     def _group_id(self, event: AstrMessageEvent) -> str:
         try:
             group_id = event.get_group_id()

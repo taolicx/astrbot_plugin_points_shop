@@ -8,13 +8,13 @@
     "description": "状态文件路径",
     "type": "string",
     "default": "data/state.json",
-    "hint": "保存积分、签到、库存、兑换记录。相对路径会放在插件目录下。"
+    "hint": "保存积分、签到、库存、奖励仓库、兑换记录等数据。相对路径会放在插件目录下。"
   },
   "poster_path": {
-    "description": "商城海报缓存路径",
+    "description": "商店海报缓存路径",
     "type": "string",
     "default": "data/shop_poster.png",
-    "hint": "发送 /商店 时动态生成的商品展示图。"
+    "hint": "发送商店命令时动态生成的商品海报输出位置。"
   },
   "signin_min_points": {
     "description": "签到最少积分",
@@ -38,12 +38,12 @@
     "default": 20
   },
   "min_bet": {
-    "description": "猜拳最小下注",
+    "description": "猜拳最小押注",
     "type": "int",
     "default": 5
   },
   "max_bet": {
-    "description": "猜拳最大下注",
+    "description": "猜拳最大押注",
     "type": "int",
     "default": 100
   },
@@ -51,13 +51,13 @@
     "description": "猜拳玩家获胜概率",
     "type": "int",
     "default": 33,
-    "hint": "单位为百分比，范围 0~100。插件会按该概率让玩家获胜。"
+    "hint": "单位为百分比，范围 0~100。"
   },
   "rps_draw_rate": {
     "description": "猜拳平局概率",
     "type": "int",
     "default": 33,
-    "hint": "单位为百分比，范围 0~100。输的概率会自动使用 100 - 获胜概率 - 平局概率；如果获胜+平局超过100，会自动压低平局概率。"
+    "hint": "单位为百分比，范围 0~100。失败概率会自动使用 100 - 获胜概率 - 平局概率。"
   },
   "items": {
     "description": "可兑换商品",
@@ -73,6 +73,7 @@
         "description": "给自己兑换一杯精神补给",
         "delivery": "请联系管理员核销。",
         "color": "#6f4e37",
+        "reward_mode": "manual",
         "enabled": true
       },
       {
@@ -85,6 +86,7 @@
         "description": "兑换一次群头衔/称号修改",
         "delivery": "兑换后把想要的头衔发给管理员。",
         "color": "#4f46e5",
+        "reward_mode": "manual",
         "enabled": true
       },
       {
@@ -95,22 +97,23 @@
         "stock": 3,
         "emoji": "🎁",
         "description": "随机小奖励，开盒有惊喜",
-        "delivery": "管理员会在群内公布盲盒结果。",
+        "delivery": "奖励会通过私聊自动发放。",
         "color": "#db2777",
+        "reward_mode": "pool",
         "enabled": true
       }
     ],
-    "hint": "逐条配置商城商品。stock=-1 表示无限库存。",
+    "hint": "所有群聊共享同一套积分与兑换数据。stock=-1 表示无限库存；reward_mode=pool 时请先往奖励仓库入库。",
     "templates": {
       "shop_item": {
         "name": "商城商品",
         "hint": "一个可兑换商品。",
         "items": {
           "id": {
-            "description": "商品ID",
+            "description": "商品 ID",
             "type": "string",
             "default": "item",
-            "hint": "兑换时使用的短ID，例如 coffee。"
+            "hint": "兑换时使用的短 ID，例如 coffee。"
           },
           "name": {
             "description": "商品名称",
@@ -143,13 +146,19 @@
             "description": "兑换说明",
             "type": "string",
             "default": "请联系管理员核销。",
-            "hint": "兑换成功后会回复给用户。"
+            "hint": "manual 模式下会在群里回给用户。"
           },
           "color": {
             "description": "海报强调色",
             "type": "string",
             "default": "#38bdf8",
             "hint": "格式如 #38bdf8。"
+          },
+          "reward_mode": {
+            "description": "发货模式",
+            "type": "string",
+            "default": "manual",
+            "hint": "manual=手动核销，pool=奖励仓库私发。"
           },
           "enabled": {
             "description": "启用商品",
