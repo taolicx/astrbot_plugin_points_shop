@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.4"
+PLUGIN_VERSION = "0.1.5"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 
