@@ -9,7 +9,7 @@
 - `reward_mode = pool` 商品自动私发兑换码
 - 插件页面 `code_manager` 专门管理兑换码仓库
 
-当前版本：`0.1.6`
+当前版本：`0.1.7`
 
 ## 功能说明
 
@@ -127,6 +127,12 @@ pip install -r requirements.txt
 6. 打开插件页面 `code_manager` 批量导入兑换码
 
 ## 版本更新
+
+### 0.1.7
+
+- 修复 `code_manager` 插件页在 AstrBot 内显示 `Failed to fetch`
+- 插件页改为通过 AstrBot 官方桥接访问接口
+- 后端同时兼容普通路径和插件页带插件名前缀的路径
 
 ### 0.1.6
 
