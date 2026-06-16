@@ -8,7 +8,7 @@
     "description": "状态文件路径",
     "type": "string",
     "default": "data/state.json",
-    "hint": "保存积分、签到、库存、奖励仓库、兑换记录等数据。相对路径会放在插件目录下。"
+    "hint": "保存积分、签到、库存、兑换码仓库、兑换记录等数据。相对路径会放在插件目录下。"
   },
   "poster_path": {
     "description": "商店海报缓存路径",
@@ -103,7 +103,7 @@
         "enabled": true
       }
     ],
-    "hint": "所有群聊共享同一套积分与兑换数据。stock=-1 表示无限库存；reward_mode=pool 时请先往奖励仓库入库。",
+    "hint": "所有群聊共享同一套积分与兑换数据。stock=-1 表示无限库存；reward_mode=pool 时请先在插件页面 code_manager 中导入兑换码。",
     "templates": {
       "shop_item": {
         "name": "商城商品",
@@ -158,7 +158,7 @@
             "description": "发货模式",
             "type": "string",
             "default": "manual",
-            "hint": "manual=手动核销，pool=奖励仓库私发。"
+            "hint": "manual=手动核销，pool=兑换码仓库私发。"
           },
           "enabled": {
             "description": "启用商品",

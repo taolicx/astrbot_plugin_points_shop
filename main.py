@@ -8,12 +8,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.message.message_event_result import MessageChain
+from quart import jsonify, request
 
 try:
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -25,7 +27,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.5"
+PLUGIN_VERSION = "0.1.6"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 
@@ -84,6 +86,7 @@ class PointsShopPlugin(Star):
         await asyncio.to_thread(self._load_state)
         await asyncio.to_thread(self._sync_stock_from_config)
         await asyncio.to_thread(self._save_state)
+        self._register_web_apis()
         logger.info("[PointsShop] initialized")
 
     async def terminate(self):
@@ -317,7 +320,7 @@ class PointsShopPlugin(Star):
             if self._reward_mode(item) == "pool":
                 pool = self._reward_pool(item_id)
                 if len(pool) < qty:
-                    await self._reply_and_stop(event, f"该商品的奖励仓库不足，当前可发送：{len(pool)}")
+                    await self._reply_and_stop(event, f"该商品的兑换码仓库不足，当前可发送：{len(pool)}")
                     return
 
             self._add_points(group_sid, user_id, -cost)
@@ -418,20 +421,17 @@ class PointsShopPlugin(Star):
         if not self._enabled():
             return
         if not self._is_admin(event):
-            await self._reply_and_stop(event, "只有管理员可以添加奖励。")
+            await self._reply_and_stop(event, "只有管理员可以添加兑换码。")
             return
 
         payload = self._command_payload(event, ("奖励入库", "入库奖励", "兑换入库"))
-        item_key, kind, content, note = self._parse_reward_pool_add_payload(payload)
-        if kind == "image" and not content:
-            content = self._extract_first_image_ref(event)
-        if not item_key or not kind or not content:
+        item_key, code, note = self._parse_reward_pool_add_payload(payload)
+        if not item_key or not code:
             await self._reply_and_stop(
                 event,
-                "用法：奖励入库 <商品ID> <文本|图片> <内容> [| 备注]\n"
-                "例：奖励入库 mystery 文本 ABCD-EFGH-IJKL\n"
-                "例：奖励入库 mystery 图片 https://example.com/code.png | 第一批兑换码\n"
-                "也支持附带一张图片后发送：奖励入库 mystery 图片 | 二维码奖励",
+                "用法：奖励入库 <商品ID> <兑换码> [| 备注]\n"
+                "例：奖励入库 mystery ABCD-EFGH-IJKL\n"
+                "例：奖励入库 mystery ABCD-EFGH-IJKL | 第一批兑换码",
             )
             return
 
@@ -445,21 +445,20 @@ class PointsShopPlugin(Star):
                 return
 
             item_id = str(item.get("id") or "")
-            entry = self._make_reward_entry(kind, content, note)
+            entry = self._make_reward_entry(code, note)
             pool = self._reward_pool(item_id)
             pool.append(entry)
             count = len(pool)
             self._save_state()
 
-        kind_label = "图片" if kind == "image" else "文本"
-        await self._reply_and_stop(event, f"已入库：{item.get('name')}\n类型：{kind_label}\n当前库存：{count}")
+        await self._reply_and_stop(event, f"已入库：{item.get('name')}\n兑换码：{code}\n当前库存：{count}")
 
     @filter.command("奖励仓库", alias={"兑换仓库", "奖励列表"}, priority=100)
     async def reward_pool_list(self, event: AstrMessageEvent):
         if not self._enabled():
             return
         if not self._is_admin(event):
-            await self._reply_and_stop(event, "只有管理员可以查看奖励仓库。")
+            await self._reply_and_stop(event, "只有管理员可以查看兑换码仓库。")
             return
 
         payload = self._command_payload(event, ("奖励仓库", "兑换仓库", "奖励列表"))
@@ -472,7 +471,7 @@ class PointsShopPlugin(Star):
                     return
                 item_id = str(item.get("id") or "")
                 pool = list(self._reward_pool(item_id))
-                lines = [f"{item.get('name')} 奖励仓库：共 {len(pool)} 条"]
+                lines = [f"{item.get('name')} 兑换码仓库：共 {len(pool)} 条"]
                 for index, entry in enumerate(pool[:10], start=1):
                     preview = self._format_reward_entry(entry).replace("\n", " | ")
                     if len(preview) > 60:
@@ -483,12 +482,242 @@ class PointsShopPlugin(Star):
                 await self._reply_and_stop(event, "\n".join(lines))
                 return
 
-            lines = ["当前各商品奖励仓库："]
+            lines = ["当前各商品兑换码仓库："]
             for item in self._items():
                 item_id = str(item.get("id") or "")
-                mode_label = "仓库私发" if self._reward_mode(item) == "pool" else "手动核销"
+                mode_label = "兑换码私发" if self._reward_mode(item) == "pool" else "手动核销"
                 lines.append(f"{item.get('name')} [{item_id}] - {len(self._reward_pool(item_id))} 条 - 模式：{mode_label}")
             await self._reply_and_stop(event, "\n".join(lines))
+
+    async def api_admin_items(self):
+        async with self._lock:
+            items = [self._serialize_admin_item(item) for item in self._items()]
+        return self._api_ok({"items": items})
+
+    async def api_admin_codes(self):
+        item_key = str(request.args.get("item_id", "") or "").strip()
+        keyword = str(request.args.get("keyword", "") or "").strip().lower()
+        if not item_key:
+            return self._api_error("缺少 item_id 参数。")
+
+        async with self._lock:
+            item = self._find_item(item_key)
+            if not item:
+                return self._api_error("没有找到这个商品。", 404)
+            if self._reward_mode(item) != "pool":
+                return self._api_error("这个商品当前不是兑换码仓库模式。")
+
+            pool = list(self._reward_pool(str(item.get("id") or "")))
+            if keyword:
+                pool = [
+                    entry
+                    for entry in pool
+                    if keyword in str(entry.get("code") or "").lower() or keyword in str(entry.get("note") or "").lower()
+                ]
+
+            codes = [self._serialize_reward_entry(entry) for entry in pool]
+            data = {
+                "item": self._serialize_admin_item(item),
+                "codes": codes,
+                "total": len(codes),
+            }
+        return self._api_ok(data)
+
+    async def api_admin_codes_bulk_add(self):
+        body = await self._request_json()
+        item_key = str(body.get("item_id") or body.get("item_key") or "").strip()
+        codes_text = str(body.get("codes_text") or "").replace("\r\n", "\n")
+        note = str(body.get("note") or "").strip()
+        if not item_key:
+            return self._api_error("请选择要入库的商品。")
+        if not codes_text.strip():
+            return self._api_error("请输入兑换码，每行一个。")
+
+        raw_codes = [line.strip() for line in codes_text.split("\n")]
+        seen: set[str] = set()
+        codes: list[str] = []
+        duplicate_in_payload = 0
+        for code in raw_codes:
+            if not code:
+                continue
+            if code in seen:
+                duplicate_in_payload += 1
+                continue
+            seen.add(code)
+            codes.append(code)
+
+        if not codes:
+            return self._api_error("没有可用的兑换码内容。")
+
+        async with self._lock:
+            item = self._find_item(item_key)
+            if not item:
+                return self._api_error("没有找到这个商品。", 404)
+            if self._reward_mode(item) != "pool":
+                return self._api_error("这个商品当前不是兑换码仓库模式。")
+
+            item_id = str(item.get("id") or "")
+            pool = self._reward_pool(item_id)
+            existing_codes = {str(entry.get("code") or "") for entry in pool}
+            added_entries: list[dict[str, Any]] = []
+            skipped_existing = 0
+
+            for code in codes:
+                if code in existing_codes:
+                    skipped_existing += 1
+                    continue
+                entry = self._make_reward_entry(code, note)
+                pool.append(entry)
+                existing_codes.add(code)
+                added_entries.append(entry)
+
+            self._save_state()
+            data = {
+                "item": self._serialize_admin_item(item),
+                "added_count": len(added_entries),
+                "skipped_existing": skipped_existing,
+                "skipped_duplicate_input": duplicate_in_payload,
+                "total_count": len(pool),
+                "codes": [self._serialize_reward_entry(entry) for entry in added_entries],
+            }
+        return self._api_ok(data, f"已添加 {len(added_entries)} 个兑换码。")
+
+    async def api_admin_codes_delete(self):
+        body = await self._request_json()
+        item_key = str(body.get("item_id") or body.get("item_key") or "").strip()
+        reward_id = str(body.get("reward_id") or "").strip()
+        if not item_key or not reward_id:
+            return self._api_error("缺少 item_id 或 reward_id。")
+
+        async with self._lock:
+            item = self._find_item(item_key)
+            if not item:
+                return self._api_error("没有找到这个商品。", 404)
+            if self._reward_mode(item) != "pool":
+                return self._api_error("这个商品当前不是兑换码仓库模式。")
+
+            item_id = str(item.get("id") or "")
+            pool = self._reward_pool(item_id)
+            next_pool = [entry for entry in pool if str(entry.get("id") or "") != reward_id]
+            if len(next_pool) == len(pool):
+                return self._api_error("没有找到要删除的兑换码。", 404)
+
+            self.state.setdefault("reward_pool", {})[item_id] = next_pool
+            self._save_state()
+            data = {
+                "item": self._serialize_admin_item(item),
+                "total_count": len(next_pool),
+            }
+        return self._api_ok(data, "兑换码已删除。")
+
+    async def api_admin_codes_clear(self):
+        body = await self._request_json()
+        item_key = str(body.get("item_id") or body.get("item_key") or "").strip()
+        if not item_key:
+            return self._api_error("缺少 item_id。")
+
+        async with self._lock:
+            item = self._find_item(item_key)
+            if not item:
+                return self._api_error("没有找到这个商品。", 404)
+            if self._reward_mode(item) != "pool":
+                return self._api_error("这个商品当前不是兑换码仓库模式。")
+
+            item_id = str(item.get("id") or "")
+            count = len(self._reward_pool(item_id))
+            self.state.setdefault("reward_pool", {})[item_id] = []
+            self._save_state()
+            data = {
+                "item": self._serialize_admin_item(item),
+                "cleared_count": count,
+                "total_count": 0,
+            }
+        return self._api_ok(data, f"已清空 {count} 个兑换码。")
+
+    def _register_web_apis(self) -> None:
+        self.context.register_web_api(
+            "/points-shop/admin/items",
+            self.api_admin_items,
+            ["GET"],
+            "积分商城兑换码管理：商品列表",
+        )
+        self.context.register_web_api(
+            "/points-shop/admin/codes",
+            self.api_admin_codes,
+            ["GET"],
+            "积分商城兑换码管理：查询兑换码",
+        )
+        self.context.register_web_api(
+            "/points-shop/admin/codes/bulk-add",
+            self.api_admin_codes_bulk_add,
+            ["POST"],
+            "积分商城兑换码管理：批量添加兑换码",
+        )
+        self.context.register_web_api(
+            "/points-shop/admin/codes/delete",
+            self.api_admin_codes_delete,
+            ["POST"],
+            "积分商城兑换码管理：删除兑换码",
+        )
+        self.context.register_web_api(
+            "/points-shop/admin/codes/clear",
+            self.api_admin_codes_clear,
+            ["POST"],
+            "积分商城兑换码管理：清空兑换码",
+        )
+
+    async def _request_json(self) -> dict[str, Any]:
+        try:
+            body = await request.get_json(silent=True)
+        except Exception:
+            body = None
+        return body if isinstance(body, dict) else {}
+
+    def _api_ok(self, data: dict[str, Any] | list[Any] | None = None, message: str | None = None):
+        return jsonify(
+            {
+                "status": "ok",
+                "message": message,
+                "data": {} if data is None else data,
+            }
+        )
+
+    def _api_error(self, message: str, status_code: int = 400):
+        response = jsonify(
+            {
+                "status": "error",
+                "message": message,
+                "data": {},
+            }
+        )
+        response.status_code = status_code
+        return response
+
+    def _serialize_admin_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        item_id = str(item.get("id") or "")
+        mode = self._reward_mode(item)
+        return {
+            "id": item_id,
+            "name": str(item.get("name") or ""),
+            "price": int(item.get("price") or 0),
+            "description": str(item.get("description") or ""),
+            "delivery": str(item.get("delivery") or ""),
+            "emoji": str(item.get("emoji") or ""),
+            "reward_mode": mode,
+            "reward_mode_label": "兑换码仓库私发" if mode == "pool" else "手动核销",
+            "pool_size": len(self._reward_pool(item_id)),
+            "stock_left": self._stock_left(item),
+            "is_pool": mode == "pool",
+        }
+
+    def _serialize_reward_entry(self, entry: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(entry.get("id") or ""),
+            "code": str(entry.get("code") or ""),
+            "note": str(entry.get("note") or ""),
+            "created_at": str(entry.get("created_at") or ""),
+        }
+
     def _default_state(self) -> dict[str, Any]:
         return {
             "balances": {},
@@ -518,9 +747,7 @@ class PointsShopPlugin(Star):
         self.state["signins"] = self._merge_signin_state(self.state.get("signins"))
         self.state["streaks"] = self._merge_streak_state(self.state.get("streaks"))
         self.state["profiles"] = self._merge_profile_state(self.state.get("profiles"))
-        reward_pool = self.state.setdefault("reward_pool", {})
-        if not isinstance(reward_pool, dict):
-            self.state["reward_pool"] = {}
+        self.state["reward_pool"] = self._normalize_reward_pool_state(self.state.get("reward_pool"))
 
     def _merge_balance_state(self, raw: Any) -> dict[str, int]:
         merged: dict[str, int] = {}
@@ -606,7 +833,8 @@ class PointsShopPlugin(Star):
 
     def _sync_stock_from_config(self) -> None:
         stock_map = self.state.setdefault("stock", {})
-        reward_pool = self.state.setdefault("reward_pool", {})
+        reward_pool = self._normalize_reward_pool_state(self.state.get("reward_pool"))
+        self.state["reward_pool"] = reward_pool
         for item in self._items():
             item_id = str(item.get("id") or "").strip()
             if not item_id:
@@ -1016,53 +1244,90 @@ class PointsShopPlugin(Star):
 
     def _reward_pool(self, item_id: str) -> list[dict[str, Any]]:
         reward_pool = self.state.setdefault("reward_pool", {})
-        pool = reward_pool.setdefault(str(item_id), [])
+        key = str(item_id)
+        pool = reward_pool.get(key, [])
         if not isinstance(pool, list):
             pool = []
-            reward_pool[str(item_id)] = pool
-        return pool
+        normalized_pool: list[dict[str, Any]] = []
+        for raw_entry in pool:
+            entry = self._normalize_reward_entry(raw_entry)
+            if entry is not None:
+                normalized_pool.append(entry)
+        reward_pool[key] = normalized_pool
+        return normalized_pool
 
-    def _make_reward_entry(self, kind: str, payload: str, note: str = "") -> dict[str, Any]:
-        kind = str(kind or "text").strip().lower()
-        payload = str(payload or "").strip()
-        note = str(note or "").strip()
-        if kind not in {"text", "image"}:
-            kind = "text"
-        return {"kind": kind, "payload": payload, "note": note, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    def _new_reward_entry_id(self) -> str:
+        return uuid4().hex
+
+    def _make_reward_entry(self, code: str, note: str = "", created_at: str = "", reward_id: str = "") -> dict[str, Any]:
+        normalized_code = str(code or "").strip()
+        normalized_note = str(note or "").strip()
+        return {
+            "id": str(reward_id or self._new_reward_entry_id()).strip(),
+            "code": normalized_code,
+            "note": normalized_note,
+            "created_at": str(created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")).strip(),
+        }
+
+    def _normalize_reward_entry(self, raw_entry: Any) -> dict[str, Any] | None:
+        if isinstance(raw_entry, str):
+            code = raw_entry.strip()
+            return self._make_reward_entry(code) if code else None
+
+        if not isinstance(raw_entry, dict):
+            return None
+
+        code = str(
+            raw_entry.get("code")
+            or raw_entry.get("payload")
+            or raw_entry.get("content")
+            or ""
+        ).strip()
+        if not code:
+            return None
+
+        return self._make_reward_entry(
+            code=code,
+            note=str(raw_entry.get("note") or "").strip(),
+            created_at=str(raw_entry.get("created_at") or "").strip(),
+            reward_id=str(raw_entry.get("id") or "").strip(),
+        )
+
+    def _normalize_reward_pool_state(self, raw_pool: Any) -> dict[str, list[dict[str, Any]]]:
+        normalized: dict[str, list[dict[str, Any]]] = {}
+        if not isinstance(raw_pool, dict):
+            return normalized
+
+        for raw_item_id, raw_entries in raw_pool.items():
+            item_id = str(raw_item_id or "").strip()
+            if not item_id:
+                continue
+            entries: list[dict[str, Any]] = []
+            if isinstance(raw_entries, list):
+                for raw_entry in raw_entries:
+                    entry = self._normalize_reward_entry(raw_entry)
+                    if entry is not None:
+                        entries.append(entry)
+            normalized[item_id] = entries
+        return normalized
 
     def _format_reward_entry(self, entry: dict[str, Any]) -> str:
-        kind = str(entry.get("kind") or "text").lower()
-        payload = str(entry.get("payload") or "")
-        note = str(entry.get("note") or "")
-        text = f"[图片]\n{payload}" if kind == "image" else payload
+        code = str(entry.get("code") or "").strip()
+        note = str(entry.get("note") or "").strip()
+        text = f"兑换码：{code}"
         if note:
-            text = f"{text}\n{note}"
+            text = f"{text}\n备注：{note}"
         return text
 
     async def _send_reward_private(self, event: AstrMessageEvent, item: dict[str, Any], record: dict[str, Any], reward_entries: list[dict[str, Any]]) -> bool:
         private_sid = self._private_sid(event.get_platform_id(), self._sender_id(event))
         lines = ["你兑换到的奖励：", f"商品：{item.get('name')}", f"订单号：{record.get('order_id')}", ""]
-        for entry in reward_entries:
-            if str(entry.get("kind") or "text").lower() == "image":
-                payload = str(entry.get("payload") or "").strip()
-                image = self._image_component_from_ref(payload)
-                if image is not None:
-                    caption_lines = list(lines)
-                    caption_lines.append(str(entry.get("note") or "").strip() or "图片奖励")
-                    try:
-                        caption = "\n".join(part for part in caption_lines if part)
-                        chain = [image] if not caption else [Comp.Plain(text=caption), image]
-                        sent = await self.context.send_message(private_sid, MessageChain(chain))
-                        if not sent:
-                            logger.warning(f"[PointsShop] private image reward send returned false: {private_sid}")
-                            raise RuntimeError("private image reward send returned false")
-                        lines = []
-                        continue
-                    except Exception as exc:
-                        logger.warning(f"[PointsShop] private image reward send failed: {exc}")
-                lines.append(self._format_reward_entry(entry))
-            else:
-                lines.append(self._format_reward_entry(entry))
+        for index, entry in enumerate(reward_entries, start=1):
+            code = str(entry.get("code") or "").strip()
+            note = str(entry.get("note") or "").strip()
+            lines.append(f"{index}. 兑换码：{code}")
+            if note:
+                lines.append(f"   备注：{note}")
             lines.append("")
         if lines:
             try:
@@ -1075,31 +1340,10 @@ class PointsShopPlugin(Star):
                 logger.warning(f"[PointsShop] private reward send failed: {private_sid}, {exc}")
                 return False
         return True
-    def _image_component_from_ref(self, image_ref: str):
-        ref = str(image_ref or "").strip()
-        if not ref:
-            return None
-        try:
-            if ref.startswith("http://") or ref.startswith("https://"):
-                return Comp.Image.fromURL(ref)
-            if ref.startswith("base64://"):
-                return Comp.Image.fromBase64(ref.removeprefix("base64://"))
-            if ref.startswith("data:image") and "," in ref:
-                return Comp.Image.fromBase64(ref.split(",", 1)[1])
-            if ref.startswith("file:///"):
-                return Comp.Image(file=ref, path=ref.removeprefix("file:///"))
-            path = Path(ref)
-            if path.exists():
-                return Comp.Image.fromFileSystem(str(path))
-            return Comp.Image(file=ref)
-        except Exception as exc:
-            logger.warning(f"[PointsShop] image ref ignored: {ref}, {exc}")
-            return None
-
-    def _parse_reward_pool_add_payload(self, payload: str) -> tuple[str, str, str, str]:
+    def _parse_reward_pool_add_payload(self, payload: str) -> tuple[str, str, str]:
         payload = str(payload or "").strip()
         if not payload:
-            return "", "", "", ""
+            return "", "", ""
         note = ""
         if "|" in payload:
             payload, note = payload.split("|", 1)
@@ -1107,13 +1351,10 @@ class PointsShopPlugin(Star):
             note = note.strip()
         parts = [part for part in re.split(r"\s+", payload) if part]
         if len(parts) < 2:
-            return "", "", "", note
+            return "", "", note
         item_key = parts[0].strip()
-        raw_kind = parts[1].strip().lower()
-        kind_map = {"文本": "text", "文字": "text", "text": "text", "txt": "text", "图片": "image", "图像": "image", "image": "image", "img": "image"}
-        kind = kind_map.get(raw_kind, "")
-        content = " ".join(parts[2:]).strip()
-        return item_key, kind, content, note
+        code = " ".join(parts[1:]).strip()
+        return item_key, code, note
     def _parse_adjust_payload(self, event: AstrMessageEvent, payload: str) -> tuple[str, int | None]:
         at_user = self._extract_at_user(event)
         parts = [part for part in re.split(r"\s+", payload.strip()) if part]
@@ -1137,22 +1378,6 @@ class PointsShopPlugin(Star):
             return ""
         return ""
 
-    def _extract_first_image_ref(self, event: AstrMessageEvent) -> str:
-        try:
-            message = getattr(getattr(event, "message_obj", None), "message", []) or []
-            for comp in message:
-                if getattr(comp, "type", "") != "Image":
-                    continue
-                for attr in ("url", "file", "path", "imageUrl"):
-                    value = str(getattr(comp, attr, "") or "").strip()
-                    if value:
-                        return value
-                data = str(getattr(comp, "base64", "") or getattr(comp, "data", "") or "").strip()
-                if data:
-                    return f"base64://{data}"
-        except Exception:
-            return ""
-        return ""
     def _help_text(self) -> str:
         return (
             "积分兑换系统指令：\n"
@@ -1163,9 +1388,10 @@ class PointsShopPlugin(Star):
             "商店 - 查看精美商品图\n"
             "兑换 <商品ID或名称> [数量] - 消耗积分兑换\n"
             "兑换记录 - 查看最近订单\n"
-            "奖励入库 <商品ID> <文本|图片> <内容> [| 备注] - 管理员向奖励仓库入库\n"
-            "奖励仓库 [商品ID] - 管理员查看奖励仓库\n"
-            "仓库发货商品兑换后会在群里提示，奖励内容通过私聊发送。\n"
+            "奖励入库 <商品ID> <兑换码> [| 备注] - 管理员手动补充兑换码\n"
+            "奖励仓库 [商品ID] - 管理员查看兑换码仓库\n"
+            "推荐在插件页面 code_manager 中批量维护兑换码。\n"
+            "仓库发货商品兑换后会在群里提示奖励已私发，兑换码通过私聊发送。\n"
             "以上指令可直接发纯文字，也兼容 / 前缀。"
         )
 

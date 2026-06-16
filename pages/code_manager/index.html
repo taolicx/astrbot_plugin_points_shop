@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>兑换码仓库</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --panel-2: #f8fafc;
+      --line: #d8e0ea;
+      --text: #162032;
+      --muted: #5f6f85;
+      --accent: #2563eb;
+      --accent-2: #0f766e;
+      --danger: #c2410c;
+      --shadow: 0 18px 40px rgba(20, 33, 61, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 28%),
+        radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 24%),
+        var(--bg);
+      color: var(--text);
+    }
+
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .title p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .toolbar,
+    .panel {
+      background: var(--panel);
+      border: 1px solid rgba(216, 224, 234, 0.9);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(280px, 1.2fr) repeat(3, minmax(120px, 0.5fr)) auto;
+      gap: 14px;
+      padding: 18px;
+      margin-bottom: 18px;
+      align-items: end;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(360px, 0.9fr) minmax(520px, 1.4fr);
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 18px;
+    }
+
+    .panel h2 {
+      margin: 0 0 16px;
+      font-size: 18px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 86px;
+    }
+
+    .stat label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .stat strong {
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fff;
+      color: var(--text);
+      transition: border-color 0.16s ease, box-shadow 0.16s ease;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      outline: none;
+      border-color: rgba(37, 99, 235, 0.65);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    textarea {
+      min-height: 260px;
+      resize: vertical;
+      font-family: "Consolas", "SFMono-Regular", monospace;
+      line-height: 1.5;
+    }
+
+    .actions,
+    .list-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      min-height: 42px;
+      transition: transform 0.12s ease, opacity 0.12s ease, background 0.16s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .primary {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .secondary {
+      background: #e8eef8;
+      color: #1e3a8a;
+      font-weight: 600;
+    }
+
+    .ghost {
+      background: #eef2f7;
+      color: var(--text);
+    }
+
+    .danger {
+      background: #fff2eb;
+      color: var(--danger);
+      font-weight: 600;
+    }
+
+    .status {
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font-size: 14px;
+      display: none;
+    }
+
+    .status.show {
+      display: block;
+    }
+
+    .status.info {
+      background: #eef5ff;
+      border-color: #bfd5ff;
+      color: #1d4ed8;
+    }
+
+    .status.error {
+      background: #fff3f1;
+      border-color: #fecaca;
+      color: #b91c1c;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      max-height: 720px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid #ebf0f5;
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: #f7f9fc;
+      z-index: 1;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    td.code {
+      font-family: "Consolas", "SFMono-Regular", monospace;
+      word-break: break-all;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .empty {
+      padding: 48px 18px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 4px 10px;
+      background: #edf7f5;
+      color: var(--accent-2);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 1100px) {
+      .toolbar,
+      .grid,
+      .stats {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .shell {
+        padding: 16px;
+      }
+
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      th,
+      td {
+        font-size: 13px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="header">
+      <div class="title">
+        <h1>兑换码仓库</h1>
+        <p>只管理 `reward_mode = pool` 的商品</p>
+      </div>
+      <div class="pill" id="poolTag">未加载</div>
+    </div>
+
+    <div id="status" class="status info"></div>
+
+    <div class="toolbar">
+      <div class="field">
+        <label for="itemSelect">商品</label>
+        <select id="itemSelect"></select>
+      </div>
+      <div class="field">
+        <label>兑换码余量</label>
+        <input id="poolSize" value="-" readonly />
+      </div>
+      <div class="field">
+        <label>积分价格</label>
+        <input id="itemPrice" value="-" readonly />
+      </div>
+      <div class="field">
+        <label>商品库存</label>
+        <input id="itemStock" value="-" readonly />
+      </div>
+      <div class="actions">
+        <button class="secondary" id="refreshItemsBtn" type="button">刷新商品</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>批量添加兑换码</h2>
+        <div class="stack">
+          <div class="stats">
+            <div class="stat">
+              <label>当前商品</label>
+              <strong id="statName">-</strong>
+            </div>
+            <div class="stat">
+              <label>仓库余量</label>
+              <strong id="statPool">0</strong>
+            </div>
+            <div class="stat">
+              <label>库存状态</label>
+              <strong id="statStock">-</strong>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="codesInput">兑换码</label>
+            <textarea id="codesInput" placeholder="每行一个兑换码"></textarea>
+          </div>
+
+          <div class="field">
+            <label for="noteInput">统一备注</label>
+            <input id="noteInput" type="text" placeholder="可选，例如：6月活动批次" />
+          </div>
+
+          <div class="actions">
+            <button class="primary" id="addCodesBtn" type="button">批量入库</button>
+            <button class="ghost" id="resetInputBtn" type="button">清空输入</button>
+          </div>
+
+          <div class="subtle" id="addSummary">准备就绪。</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>仓库列表</h2>
+        <div class="stack">
+          <div class="list-actions">
+            <div class="field" style="flex: 1 1 260px;">
+              <label for="searchInput">筛选</label>
+              <input id="searchInput" type="text" placeholder="按兑换码或备注检索" />
+            </div>
+            <button class="secondary" id="searchBtn" type="button">查询</button>
+            <button class="ghost" id="refreshCodesBtn" type="button">刷新列表</button>
+            <button class="danger" id="clearCodesBtn" type="button">清空当前商品</button>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 44%;">兑换码</th>
+                  <th style="width: 20%;">备注</th>
+                  <th style="width: 18%;">添加时间</th>
+                  <th style="width: 18%;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="codesBody">
+                <tr><td colspan="4" class="empty">正在加载</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const apiPrefix = "/api/plug/points-shop/admin";
+    const state = {
+      items: [],
+      selectedItemId: "",
+      codes: [],
+    };
+
+    const elements = {
+      status: document.getElementById("status"),
+      poolTag: document.getElementById("poolTag"),
+      itemSelect: document.getElementById("itemSelect"),
+      poolSize: document.getElementById("poolSize"),
+      itemPrice: document.getElementById("itemPrice"),
+      itemStock: document.getElementById("itemStock"),
+      statName: document.getElementById("statName"),
+      statPool: document.getElementById("statPool"),
+      statStock: document.getElementById("statStock"),
+      codesInput: document.getElementById("codesInput"),
+      noteInput: document.getElementById("noteInput"),
+      addSummary: document.getElementById("addSummary"),
+      searchInput: document.getElementById("searchInput"),
+      codesBody: document.getElementById("codesBody"),
+      addCodesBtn: document.getElementById("addCodesBtn"),
+      refreshItemsBtn: document.getElementById("refreshItemsBtn"),
+      refreshCodesBtn: document.getElementById("refreshCodesBtn"),
+      searchBtn: document.getElementById("searchBtn"),
+      clearCodesBtn: document.getElementById("clearCodesBtn"),
+      resetInputBtn: document.getElementById("resetInputBtn"),
+    };
+
+    function showStatus(message, type = "info") {
+      elements.status.textContent = message || "";
+      elements.status.className = `status ${type} show`;
+    }
+
+    function hideStatus() {
+      elements.status.className = "status info";
+      elements.status.textContent = "";
+    }
+
+    function getSelectedItem() {
+      return state.items.find((item) => item.id === state.selectedItemId) || null;
+    }
+
+    function formatStock(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number < 0) {
+        return "无限";
+      }
+      return String(number);
+    }
+
+    async function apiFetch(path, options = {}) {
+      const response = await fetch(`${apiPrefix}${path}`, {
+        method: options.method || "GET",
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.headers || {}),
+        },
+        credentials: "include",
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        throw new Error("接口返回了无法解析的数据。");
+      }
+
+      if (!response.ok || payload?.status !== "ok") {
+        throw new Error(payload?.message || "请求失败。");
+      }
+      return payload;
+    }
+
+    function renderItemSummary() {
+      const item = getSelectedItem();
+      const poolSize = item ? Number(item.pool_size || 0) : 0;
+      elements.poolTag.textContent = item ? `${item.name} · ${poolSize} 条` : "没有可管理商品";
+      elements.poolSize.value = item ? String(poolSize) : "-";
+      elements.itemPrice.value = item ? String(item.price || 0) : "-";
+      elements.itemStock.value = item ? formatStock(item.stock_left) : "-";
+      elements.statName.textContent = item ? item.name : "-";
+      elements.statPool.textContent = item ? String(poolSize) : "0";
+      elements.statStock.textContent = item ? formatStock(item.stock_left) : "-";
+    }
+
+    function renderItemOptions() {
+      const options = state.items
+        .map((item) => `<option value="${item.id}">${item.name} [${item.id}]</option>`)
+        .join("");
+
+      if (!options) {
+        elements.itemSelect.innerHTML = `<option value="">没有 reward_mode=pool 的商品</option>`;
+        state.selectedItemId = "";
+      } else {
+        elements.itemSelect.innerHTML = options;
+        if (!state.items.some((item) => item.id === state.selectedItemId)) {
+          state.selectedItemId = state.items[0].id;
+        }
+        elements.itemSelect.value = state.selectedItemId;
+      }
+
+      renderItemSummary();
+    }
+
+    function renderCodes() {
+      if (!state.codes.length) {
+        elements.codesBody.innerHTML = `<tr><td colspan="4" class="empty">当前没有兑换码</td></tr>`;
+        return;
+      }
+
+      elements.codesBody.innerHTML = state.codes
+        .map((entry) => {
+          const code = escapeHtml(entry.code || "");
+          const note = escapeHtml(entry.note || "");
+          const createdAt = escapeHtml(entry.created_at || "-");
+          const id = escapeHtml(entry.id || "");
+          return `
+            <tr>
+              <td class="code">${code}</td>
+              <td>${note || "-"}</td>
+              <td>${createdAt}</td>
+              <td>
+                <div class="row-actions">
+                  <button class="ghost" type="button" data-copy="${code}">复制</button>
+                  <button class="danger" type="button" data-delete="${id}">删除</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        })
+        .join("");
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    async function loadItems(preferKeepSelection = true) {
+      const previousId = state.selectedItemId;
+      const payload = await apiFetch("/items");
+      state.items = (payload.data?.items || []).filter((item) => item.is_pool);
+
+      if (preferKeepSelection && state.items.some((item) => item.id === previousId)) {
+        state.selectedItemId = previousId;
+      } else {
+        state.selectedItemId = state.items[0]?.id || "";
+      }
+
+      renderItemOptions();
+    }
+
+    async function loadCodes() {
+      const item = getSelectedItem();
+      if (!item) {
+        state.codes = [];
+        renderCodes();
+        renderItemSummary();
+        return;
+      }
+
+      const keyword = elements.searchInput.value.trim();
+      const query = new URLSearchParams({ item_id: item.id });
+      if (keyword) {
+        query.set("keyword", keyword);
+      }
+
+      const payload = await apiFetch(`/codes?${query.toString()}`);
+      state.codes = payload.data?.codes || [];
+      const latestItem = payload.data?.item || item;
+      state.items = state.items.map((entry) => (entry.id === latestItem.id ? latestItem : entry));
+      renderItemSummary();
+      renderCodes();
+    }
+
+    async function refreshAll(message) {
+      hideStatus();
+      await loadItems(true);
+      await loadCodes();
+      if (message) {
+        showStatus(message, "info");
+      }
+    }
+
+    async function handleAddCodes() {
+      const item = getSelectedItem();
+      if (!item) {
+        showStatus("请先配置一个 reward_mode=pool 的商品。", "error");
+        return;
+      }
+
+      const codesText = elements.codesInput.value.trim();
+      if (!codesText) {
+        showStatus("请输入兑换码内容。", "error");
+        return;
+      }
+
+      elements.addCodesBtn.disabled = true;
+      try {
+        const payload = await apiFetch("/codes/bulk-add", {
+          method: "POST",
+          body: {
+            item_id: item.id,
+            codes_text: codesText,
+            note: elements.noteInput.value.trim(),
+          },
+        });
+
+        const data = payload.data || {};
+        const addedCount = Number(data.added_count || 0);
+        const skippedExisting = Number(data.skipped_existing || 0);
+        const skippedDuplicateInput = Number(data.skipped_duplicate_input || 0);
+        elements.addSummary.textContent =
+          `本次新增 ${addedCount} 个，已存在跳过 ${skippedExisting} 个，输入重复跳过 ${skippedDuplicateInput} 个。`;
+        elements.codesInput.value = "";
+        await refreshAll(payload.message || "兑换码已入库。");
+      } catch (error) {
+        showStatus(error.message || "添加失败。", "error");
+      } finally {
+        elements.addCodesBtn.disabled = false;
+      }
+    }
+
+    async function handleDeleteCode(rewardId) {
+      const item = getSelectedItem();
+      if (!item || !rewardId) {
+        return;
+      }
+      if (!window.confirm("确认删除这条兑换码吗？")) {
+        return;
+      }
+
+      try {
+        const payload = await apiFetch("/codes/delete", {
+          method: "POST",
+          body: { item_id: item.id, reward_id: rewardId },
+        });
+        await refreshAll(payload.message || "兑换码已删除。");
+      } catch (error) {
+        showStatus(error.message || "删除失败。", "error");
+      }
+    }
+
+    async function handleClearCodes() {
+      const item = getSelectedItem();
+      if (!item) {
+        return;
+      }
+      if (!window.confirm(`确认清空 ${item.name} 的全部兑换码吗？`)) {
+        return;
+      }
+
+      try {
+        const payload = await apiFetch("/codes/clear", {
+          method: "POST",
+          body: { item_id: item.id },
+        });
+        await refreshAll(payload.message || "兑换码已清空。");
+      } catch (error) {
+        showStatus(error.message || "清空失败。", "error");
+      }
+    }
+
+    async function handleCopyCode(code) {
+      try {
+        await navigator.clipboard.writeText(code);
+        showStatus("兑换码已复制。", "info");
+      } catch (error) {
+        showStatus("复制失败，请手动复制。", "error");
+      }
+    }
+
+    async function bootstrap() {
+      try {
+        if (window.AstrBotPluginPage?.ready) {
+          await window.AstrBotPluginPage.ready();
+        }
+      } catch (error) {
+      }
+
+      try {
+        await refreshAll("页面已就绪。");
+      } catch (error) {
+        showStatus(error.message || "页面初始化失败。", "error");
+      }
+    }
+
+    elements.itemSelect.addEventListener("change", async (event) => {
+      state.selectedItemId = event.target.value;
+      try {
+        await loadCodes();
+      } catch (error) {
+        showStatus(error.message || "切换商品失败。", "error");
+      }
+    });
+
+    elements.refreshItemsBtn.addEventListener("click", async () => {
+      try {
+        await refreshAll("商品列表已刷新。");
+      } catch (error) {
+        showStatus(error.message || "刷新失败。", "error");
+      }
+    });
+
+    elements.refreshCodesBtn.addEventListener("click", async () => {
+      try {
+        await loadCodes();
+        showStatus("兑换码列表已刷新。", "info");
+      } catch (error) {
+        showStatus(error.message || "刷新失败。", "error");
+      }
+    });
+
+    elements.searchBtn.addEventListener("click", async () => {
+      try {
+        await loadCodes();
+        showStatus("筛选结果已更新。", "info");
+      } catch (error) {
+        showStatus(error.message || "查询失败。", "error");
+      }
+    });
+
+    elements.searchInput.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      try {
+        await loadCodes();
+        showStatus("筛选结果已更新。", "info");
+      } catch (error) {
+        showStatus(error.message || "查询失败。", "error");
+      }
+    });
+
+    elements.addCodesBtn.addEventListener("click", handleAddCodes);
+
+    elements.clearCodesBtn.addEventListener("click", handleClearCodes);
+
+    elements.resetInputBtn.addEventListener("click", () => {
+      elements.codesInput.value = "";
+      elements.noteInput.value = "";
+      elements.addSummary.textContent = "输入区已清空。";
+      hideStatus();
+    });
+
+    elements.codesBody.addEventListener("click", async (event) => {
+      const copyCode = event.target.getAttribute("data-copy");
+      if (copyCode) {
+        await handleCopyCode(copyCode);
+        return;
+      }
+
+      const rewardId = event.target.getAttribute("data-delete");
+      if (rewardId) {
+        await handleDeleteCode(rewardId);
+      }
+    });
+
+    bootstrap();
+  </script>
+</body>
+</html>
