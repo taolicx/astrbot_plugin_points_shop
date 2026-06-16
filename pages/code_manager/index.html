@@ -311,6 +311,50 @@
       font-weight: 700;
     }
 
+    .confirm-mask {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.36);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 50;
+    }
+
+    .confirm-mask.show {
+      display: flex;
+    }
+
+    .confirm-card {
+      width: min(420px, 100%);
+      background: #ffffff;
+      border: 1px solid rgba(216, 224, 234, 0.96);
+      border-radius: 8px;
+      box-shadow: 0 24px 48px rgba(15, 23, 42, 0.18);
+      padding: 18px;
+    }
+
+    .confirm-card h3 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    .confirm-card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+      white-space: pre-wrap;
+    }
+
+    .confirm-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
     @media (max-width: 1100px) {
       .toolbar,
       .grid,
@@ -441,6 +485,17 @@
     </div>
   </div>
 
+  <div class="confirm-mask" id="confirmMask">
+    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h3 id="confirmTitle">请确认</h3>
+      <p id="confirmMessage">确认执行这个操作吗？</p>
+      <div class="confirm-actions">
+        <button class="ghost" id="confirmCancelBtn" type="button">取消</button>
+        <button class="danger" id="confirmOkBtn" type="button">确认</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const pluginName = "astrbot_plugin_points_shop";
     const pluginApiBase = "points-shop/admin";
@@ -449,6 +504,7 @@
       selectedItemId: "",
       codes: [],
     };
+    let confirmResolver = null;
 
     const elements = {
       status: document.getElementById("status"),
@@ -471,6 +527,10 @@
       searchBtn: document.getElementById("searchBtn"),
       clearCodesBtn: document.getElementById("clearCodesBtn"),
       resetInputBtn: document.getElementById("resetInputBtn"),
+      confirmMask: document.getElementById("confirmMask"),
+      confirmMessage: document.getElementById("confirmMessage"),
+      confirmOkBtn: document.getElementById("confirmOkBtn"),
+      confirmCancelBtn: document.getElementById("confirmCancelBtn"),
     };
 
     function showStatus(message, type = "info") {
@@ -481,6 +541,23 @@
     function hideStatus() {
       elements.status.className = "status info";
       elements.status.textContent = "";
+    }
+
+    function closeConfirm(result) {
+      elements.confirmMask.classList.remove("show");
+      const resolver = confirmResolver;
+      confirmResolver = null;
+      if (typeof resolver === "function") {
+        resolver(Boolean(result));
+      }
+    }
+
+    function askConfirm(message) {
+      elements.confirmMessage.textContent = message || "确认执行这个操作吗？";
+      elements.confirmMask.classList.add("show");
+      return new Promise((resolve) => {
+        confirmResolver = resolve;
+      });
     }
 
     function getSelectedItem() {
@@ -747,7 +824,8 @@
       if (!item || !rewardId) {
         return;
       }
-      if (!window.confirm("确认删除这条兑换码吗？")) {
+      const confirmed = await askConfirm("确认删除这条兑换码吗？");
+      if (!confirmed) {
         return;
       }
 
@@ -764,7 +842,8 @@
       if (!item) {
         return;
       }
-      if (!window.confirm(`确认清空 ${item.name} 的全部兑换码吗？`)) {
+      const confirmed = await askConfirm(`确认清空 ${item.name} 的全部兑换码吗？\n这个操作不可撤回。`);
+      if (!confirmed) {
         return;
       }
 
@@ -857,6 +936,20 @@
       elements.noteInput.value = "";
       elements.addSummary.textContent = "输入区已清空。";
       hideStatus();
+    });
+
+    elements.confirmOkBtn.addEventListener("click", () => {
+      closeConfirm(true);
+    });
+
+    elements.confirmCancelBtn.addEventListener("click", () => {
+      closeConfirm(false);
+    });
+
+    elements.confirmMask.addEventListener("click", (event) => {
+      if (event.target === elements.confirmMask) {
+        closeConfirm(false);
+      }
     });
 
     elements.codesBody.addEventListener("click", async (event) => {
