@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.6"
+PLUGIN_VERSION = "0.1.7"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 
@@ -635,36 +635,17 @@ class PointsShopPlugin(Star):
         return self._api_ok(data, f"已清空 {count} 个兑换码。")
 
     def _register_web_apis(self) -> None:
-        self.context.register_web_api(
-            "/points-shop/admin/items",
-            self.api_admin_items,
-            ["GET"],
-            "积分商城兑换码管理：商品列表",
-        )
-        self.context.register_web_api(
-            "/points-shop/admin/codes",
-            self.api_admin_codes,
-            ["GET"],
-            "积分商城兑换码管理：查询兑换码",
-        )
-        self.context.register_web_api(
-            "/points-shop/admin/codes/bulk-add",
-            self.api_admin_codes_bulk_add,
-            ["POST"],
-            "积分商城兑换码管理：批量添加兑换码",
-        )
-        self.context.register_web_api(
-            "/points-shop/admin/codes/delete",
-            self.api_admin_codes_delete,
-            ["POST"],
-            "积分商城兑换码管理：删除兑换码",
-        )
-        self.context.register_web_api(
-            "/points-shop/admin/codes/clear",
-            self.api_admin_codes_clear,
-            ["POST"],
-            "积分商城兑换码管理：清空兑换码",
-        )
+        routes = [
+            ("items", self.api_admin_items, ["GET"], "积分商城兑换码管理：商品列表"),
+            ("codes", self.api_admin_codes, ["GET"], "积分商城兑换码管理：查询兑换码"),
+            ("codes/bulk-add", self.api_admin_codes_bulk_add, ["POST"], "积分商城兑换码管理：批量添加兑换码"),
+            ("codes/delete", self.api_admin_codes_delete, ["POST"], "积分商城兑换码管理：删除兑换码"),
+            ("codes/clear", self.api_admin_codes_clear, ["POST"], "积分商城兑换码管理：清空兑换码"),
+        ]
+        for suffix, handler, methods, desc in routes:
+            normalized = str(suffix).strip().lstrip("/")
+            self.context.register_web_api(f"/points-shop/admin/{normalized}", handler, methods, desc)
+            self.context.register_web_api(f"/{PLUGIN_NAME}/points-shop/admin/{normalized}", handler, methods, desc)
 
     async def _request_json(self) -> dict[str, Any]:
         try:

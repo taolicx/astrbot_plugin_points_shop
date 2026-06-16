@@ -442,7 +442,8 @@
   </div>
 
   <script>
-    const apiPrefix = "/api/plug/points-shop/admin";
+    const pluginName = "astrbot_plugin_points_shop";
+    const pluginApiBase = "points-shop/admin";
     const state = {
       items: [],
       selectedItemId: "",
@@ -494,28 +495,100 @@
       return String(number);
     }
 
-    async function apiFetch(path, options = {}) {
-      const response = await fetch(`${apiPrefix}${path}`, {
-        method: options.method || "GET",
-        headers: {
-          "Content-Type": "application/json",
-          ...(options.headers || {}),
-        },
-        credentials: "include",
-        body: options.body ? JSON.stringify(options.body) : undefined,
-      });
+    function buildPluginEndpoint(path) {
+      const cleanPath = String(path || "").replace(/^\/+/, "");
+      return `${pluginApiBase}/${cleanPath}`;
+    }
 
-      let payload = null;
+    function buildDirectUrl(path, params) {
+      const endpoint = buildPluginEndpoint(path);
+      const query = new URLSearchParams();
+      if (params && typeof params === "object") {
+        Object.entries(params).forEach(([key, value]) => {
+          if (value === undefined || value === null || value === "") {
+            return;
+          }
+          query.set(key, String(value));
+        });
+      }
+      const queryText = query.toString();
+      return `/api/plug/${pluginName}/${endpoint}${queryText ? `?${queryText}` : ""}`;
+    }
+
+    function normalizeBridgePayload(payload) {
+      if (payload && typeof payload === "object" && "status" in payload) {
+        return payload;
+      }
+      return {
+        status: "ok",
+        data: payload && typeof payload === "object" ? payload : {},
+        message: "",
+      };
+    }
+
+    function normalizeRequestError(error) {
+      const message = error?.message || "";
+      if (!message || message === "Failed to fetch" || /NetworkError/i.test(message)) {
+        return new Error("接口连接失败，请在 AstrBot 插件页面内打开，并确认插件已成功加载。");
+      }
+      return error instanceof Error ? error : new Error(String(message || "请求失败。"));
+    }
+
+    async function apiGet(path, params = {}) {
       try {
-        payload = await response.json();
-      } catch (error) {
-        throw new Error("接口返回了无法解析的数据。");
-      }
+        if (window.AstrBotPluginPage?.apiGet) {
+          const payload = await window.AstrBotPluginPage.apiGet(buildPluginEndpoint(path), params);
+          return normalizeBridgePayload(payload);
+        }
 
-      if (!response.ok || payload?.status !== "ok") {
-        throw new Error(payload?.message || "请求失败。");
+        const response = await fetch(buildDirectUrl(path, params), {
+          method: "GET",
+          credentials: "include",
+        });
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (error) {
+          throw new Error("接口返回了无法解析的数据。");
+        }
+        if (!response.ok || payload?.status !== "ok") {
+          throw new Error(payload?.message || "请求失败。");
+        }
+        return payload;
+      } catch (error) {
+        throw normalizeRequestError(error);
       }
-      return payload;
+    }
+
+    async function apiPost(path, body = {}) {
+      try {
+        if (window.AstrBotPluginPage?.apiPost) {
+          const payload = await window.AstrBotPluginPage.apiPost(buildPluginEndpoint(path), body);
+          return normalizeBridgePayload(payload);
+        }
+
+        const response = await fetch(buildDirectUrl(path), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify(body || {}),
+        });
+
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (error) {
+          throw new Error("接口返回了无法解析的数据。");
+        }
+        if (!response.ok || payload?.status !== "ok") {
+          throw new Error(payload?.message || "请求失败。");
+        }
+        return payload;
+      } catch (error) {
+        throw normalizeRequestError(error);
+      }
     }
 
     function renderItemSummary() {
@@ -589,7 +662,7 @@
 
     async function loadItems(preferKeepSelection = true) {
       const previousId = state.selectedItemId;
-      const payload = await apiFetch("/items");
+      const payload = await apiGet("items");
       state.items = (payload.data?.items || []).filter((item) => item.is_pool);
 
       if (preferKeepSelection && state.items.some((item) => item.id === previousId)) {
@@ -611,12 +684,12 @@
       }
 
       const keyword = elements.searchInput.value.trim();
-      const query = new URLSearchParams({ item_id: item.id });
+      const params = { item_id: item.id };
       if (keyword) {
-        query.set("keyword", keyword);
+        params.keyword = keyword;
       }
 
-      const payload = await apiFetch(`/codes?${query.toString()}`);
+      const payload = await apiGet("codes", params);
       state.codes = payload.data?.codes || [];
       const latestItem = payload.data?.item || item;
       state.items = state.items.map((entry) => (entry.id === latestItem.id ? latestItem : entry));
@@ -648,13 +721,10 @@
 
       elements.addCodesBtn.disabled = true;
       try {
-        const payload = await apiFetch("/codes/bulk-add", {
-          method: "POST",
-          body: {
-            item_id: item.id,
-            codes_text: codesText,
-            note: elements.noteInput.value.trim(),
-          },
+        const payload = await apiPost("codes/bulk-add", {
+          item_id: item.id,
+          codes_text: codesText,
+          note: elements.noteInput.value.trim(),
         });
 
         const data = payload.data || {};
@@ -682,10 +752,7 @@
       }
 
       try {
-        const payload = await apiFetch("/codes/delete", {
-          method: "POST",
-          body: { item_id: item.id, reward_id: rewardId },
-        });
+        const payload = await apiPost("codes/delete", { item_id: item.id, reward_id: rewardId });
         await refreshAll(payload.message || "兑换码已删除。");
       } catch (error) {
         showStatus(error.message || "删除失败。", "error");
@@ -702,10 +769,7 @@
       }
 
       try {
-        const payload = await apiFetch("/codes/clear", {
-          method: "POST",
-          body: { item_id: item.id },
-        });
+        const payload = await apiPost("codes/clear", { item_id: item.id });
         await refreshAll(payload.message || "兑换码已清空。");
       } catch (error) {
         showStatus(error.message || "清空失败。", "error");
