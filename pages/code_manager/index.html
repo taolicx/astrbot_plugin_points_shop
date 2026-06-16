@@ -3,20 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>兑换码仓库</title>
+  <title>积分商城管理台</title>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f5f7fb;
-      --panel: #ffffff;
-      --panel-2: #f8fafc;
-      --line: #d8e0ea;
-      --text: #162032;
-      --muted: #5f6f85;
-      --accent: #2563eb;
-      --accent-2: #0f766e;
+      --bg: #f3f6fb;
+      --panel: #fcfdff;
+      --panel-alt: #f7f9fc;
+      --line: #d7e0eb;
+      --text: #162033;
+      --muted: #64748b;
+      --primary: #2563eb;
+      --primary-soft: #e9f0ff;
+      --success: #0f766e;
+      --success-soft: #edf8f5;
       --danger: #c2410c;
-      --shadow: 0 18px 40px rgba(20, 33, 61, 0.08);
+      --danger-soft: #fff4ed;
+      --shadow: 0 18px 38px rgba(18, 34, 61, 0.08);
     }
 
     * {
@@ -26,75 +29,122 @@
     body {
       margin: 0;
       font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 28%),
-        radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 24%),
-        var(--bg);
       color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 24%),
+        radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 20%),
+        var(--bg);
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
     }
 
     .shell {
-      max-width: 1440px;
+      max-width: 1500px;
       margin: 0 auto;
-      padding: 28px;
+      padding: 24px;
     }
 
     .header {
       display: flex;
-      align-items: flex-end;
       justify-content: space-between;
+      align-items: flex-end;
       gap: 16px;
       margin-bottom: 20px;
     }
 
-    .title h1 {
+    .header h1 {
       margin: 0;
       font-size: 28px;
-      line-height: 1.2;
-      font-weight: 700;
+      line-height: 1.15;
     }
 
-    .title p {
+    .header p {
       margin: 8px 0 0;
       color: var(--muted);
       font-size: 14px;
     }
 
-    .toolbar,
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--primary-soft);
+      color: #1e40af;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status {
+      display: none;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      margin-bottom: 16px;
+      font-size: 14px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+
+    .status.show {
+      display: block;
+    }
+
+    .status.info {
+      background: #eef5ff;
+      border-color: #bfd6ff;
+      color: #1d4ed8;
+    }
+
+    .status.error {
+      background: #fff4f2;
+      border-color: #fecaca;
+      color: #b91c1c;
+    }
+
     .panel {
       background: var(--panel);
-      border: 1px solid rgba(216, 224, 234, 0.9);
+      border: 1px solid rgba(215, 224, 235, 0.92);
       border-radius: 8px;
       box-shadow: var(--shadow);
-    }
-
-    .toolbar {
-      display: grid;
-      grid-template-columns: minmax(280px, 1.2fr) repeat(3, minmax(120px, 0.5fr)) auto;
-      gap: 14px;
       padding: 18px;
-      margin-bottom: 18px;
-      align-items: end;
     }
 
-    .grid {
+    .layout {
       display: grid;
-      grid-template-columns: minmax(360px, 0.9fr) minmax(520px, 1.4fr);
+      grid-template-columns: minmax(380px, 0.95fr) minmax(660px, 1.35fr);
       gap: 18px;
-    }
-
-    .panel {
-      padding: 18px;
-    }
-
-    .panel h2 {
-      margin: 0 0 16px;
-      font-size: 18px;
     }
 
     .stack {
       display: grid;
-      gap: 14px;
+      gap: 16px;
+    }
+
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .section-title h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .section-title p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
     }
 
     .stats {
@@ -104,7 +154,7 @@
     }
 
     .stat {
-      background: var(--panel-2);
+      background: var(--panel-alt);
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 14px;
@@ -113,9 +163,9 @@
 
     .stat label {
       display: block;
+      margin-bottom: 8px;
       color: var(--muted);
       font-size: 12px;
-      margin-bottom: 8px;
     }
 
     .stat strong {
@@ -123,22 +173,25 @@
       line-height: 1;
     }
 
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
     .field {
       display: grid;
       gap: 8px;
+    }
+
+    .field.span-2 {
+      grid-column: span 2;
     }
 
     .field label {
       color: var(--muted);
       font-size: 13px;
       font-weight: 600;
-    }
-
-    input,
-    select,
-    textarea,
-    button {
-      font: inherit;
     }
 
     input,
@@ -162,25 +215,27 @@
     }
 
     textarea {
-      min-height: 260px;
+      min-height: 116px;
       resize: vertical;
-      font-family: "Consolas", "SFMono-Regular", monospace;
-      line-height: 1.5;
+      line-height: 1.6;
     }
 
+    .toolbar,
     .actions,
-    .list-actions {
+    .list-actions,
+    .inline {
       display: flex;
-      gap: 10px;
       flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
     }
 
     button {
       border: 0;
       border-radius: 8px;
+      min-height: 42px;
       padding: 10px 14px;
       cursor: pointer;
-      min-height: 42px;
       transition: transform 0.12s ease, opacity 0.12s ease, background 0.16s ease;
     }
 
@@ -195,15 +250,15 @@
     }
 
     .primary {
-      background: var(--accent);
+      background: var(--primary);
       color: #fff;
-      font-weight: 600;
+      font-weight: 700;
     }
 
     .secondary {
       background: #e8eef8;
       color: #1e3a8a;
-      font-weight: 600;
+      font-weight: 700;
     }
 
     .ghost {
@@ -212,40 +267,163 @@
     }
 
     .danger {
-      background: #fff2eb;
+      background: var(--danger-soft);
       color: var(--danger);
-      font-weight: 600;
+      font-weight: 700;
     }
 
-    .status {
-      margin-bottom: 16px;
-      padding: 12px 14px;
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 0 12px;
       border-radius: 8px;
-      border: 1px solid transparent;
-      font-size: 14px;
-      display: none;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
     }
 
-    .status.show {
+    .toggle input {
+      width: auto;
+      margin: 0;
+      box-shadow: none;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .item-list {
+      display: grid;
+      gap: 10px;
+      max-height: 340px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .item-card {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+      transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.12s ease;
+    }
+
+    .item-card:hover {
+      transform: translateY(-1px);
+      border-color: rgba(37, 99, 235, 0.35);
+    }
+
+    .item-card.active {
+      border-color: rgba(37, 99, 235, 0.7);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+
+    .item-thumb {
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
+      background: #eff4fb;
+      border: 1px solid rgba(215, 224, 235, 0.9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      color: #fff;
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    .item-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
       display: block;
     }
 
-    .status.info {
-      background: #eef5ff;
-      border-color: #bfd5ff;
-      color: #1d4ed8;
+    .item-meta {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+      align-content: start;
     }
 
-    .status.error {
-      background: #fff3f1;
-      border-color: #fecaca;
-      color: #b91c1c;
+    .item-meta strong {
+      font-size: 15px;
+      line-height: 1.35;
     }
 
-    .subtle {
+    .item-meta .desc {
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
       line-height: 1.6;
+      max-height: 38px;
+      overflow: hidden;
+    }
+
+    .meta-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .badge.pool {
+      background: var(--success-soft);
+      border-color: #b8e3d8;
+      color: var(--success);
+    }
+
+    .icon-uploader {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .icon-preview {
+      width: 96px;
+      height: 96px;
+      border-radius: 8px;
+      border: 1px solid rgba(215, 224, 235, 0.9);
+      background: #fff;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      color: #fff;
+    }
+
+    .icon-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
     }
 
     .table-wrap {
@@ -253,7 +431,7 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
-      max-height: 720px;
+      max-height: 520px;
     }
 
     table {
@@ -274,8 +452,8 @@
     th {
       position: sticky;
       top: 0;
-      background: #f7f9fc;
       z-index: 1;
+      background: #f7f9fc;
       color: var(--muted);
       font-weight: 700;
     }
@@ -285,12 +463,6 @@
       word-break: break-all;
     }
 
-    .row-actions {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
     .empty {
       padding: 48px 18px;
       text-align: center;
@@ -298,27 +470,14 @@
       font-size: 14px;
     }
 
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      min-height: 28px;
-      padding: 4px 10px;
-      background: #edf7f5;
-      color: var(--accent-2);
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-
     .confirm-mask {
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 42, 0.36);
       display: none;
       align-items: center;
       justify-content: center;
       padding: 20px;
+      background: rgba(15, 23, 42, 0.36);
       z-index: 50;
     }
 
@@ -328,7 +487,7 @@
 
     .confirm-card {
       width: min(420px, 100%);
-      background: #ffffff;
+      background: #fff;
       border: 1px solid rgba(216, 224, 234, 0.96);
       border-radius: 8px;
       box-shadow: 0 24px 48px rgba(15, 23, 42, 0.18);
@@ -355,15 +514,19 @@
       margin-top: 18px;
     }
 
-    @media (max-width: 1100px) {
-      .toolbar,
-      .grid,
+    @media (max-width: 1180px) {
+      .layout,
+      .field-grid,
       .stats {
         grid-template-columns: 1fr;
       }
+
+      .field.span-2 {
+        grid-column: span 1;
+      }
     }
 
-    @media (max-width: 720px) {
+    @media (max-width: 760px) {
       .shell {
         padding: 16px;
       }
@@ -373,9 +536,9 @@
         align-items: flex-start;
       }
 
-      th,
-      td {
-        font-size: 13px;
+      .item-card,
+      .icon-uploader {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -383,80 +546,175 @@
 <body>
   <div class="shell">
     <div class="header">
-      <div class="title">
-        <h1>兑换码仓库</h1>
-        <p>只管理 `reward_mode = pool` 的商品</p>
+      <div>
+        <h1>积分商城管理台</h1>
+        <p>直接管理商品、上传商品图标，以及维护 `reward_mode = pool` 的兑换码仓库</p>
       </div>
-      <div class="pill" id="poolTag">未加载</div>
+      <div class="pill" id="summaryTag">未加载</div>
     </div>
 
     <div id="status" class="status info"></div>
 
-    <div class="toolbar">
-      <div class="field">
-        <label for="itemSelect">商品</label>
-        <select id="itemSelect"></select>
-      </div>
-      <div class="field">
-        <label>兑换码余量</label>
-        <input id="poolSize" value="-" readonly />
-      </div>
-      <div class="field">
-        <label>积分价格</label>
-        <input id="itemPrice" value="-" readonly />
-      </div>
-      <div class="field">
-        <label>商品库存</label>
-        <input id="itemStock" value="-" readonly />
-      </div>
-      <div class="actions">
-        <button class="secondary" id="refreshItemsBtn" type="button">刷新商品</button>
-      </div>
-    </div>
+    <div class="layout">
+      <section class="stack">
+        <div class="panel">
+          <div class="section-title">
+            <div>
+              <h2>商品管理</h2>
+              <p>新增商品、修改价格库存、切换发货模式、上传图标</p>
+            </div>
+            <div class="toolbar">
+              <button class="secondary" id="newItemBtn" type="button">新建商品</button>
+              <button class="ghost" id="refreshItemsBtn" type="button">刷新</button>
+            </div>
+          </div>
 
-    <div class="grid">
-      <section class="panel">
-        <h2>批量添加兑换码</h2>
-        <div class="stack">
           <div class="stats">
             <div class="stat">
-              <label>当前商品</label>
-              <strong id="statName">-</strong>
+              <label>商品总数</label>
+              <strong id="statItems">0</strong>
             </div>
             <div class="stat">
-              <label>仓库余量</label>
-              <strong id="statPool">0</strong>
+              <label>仓库商品</label>
+              <strong id="statPoolItems">0</strong>
             </div>
             <div class="stat">
-              <label>库存状态</label>
-              <strong id="statStock">-</strong>
+              <label>当前仓库余量</label>
+              <strong id="statPoolCodes">0</strong>
             </div>
           </div>
 
-          <div class="field">
-            <label for="codesInput">兑换码</label>
-            <textarea id="codesInput" placeholder="每行一个兑换码"></textarea>
+          <div class="item-list" id="itemList" style="margin-top: 16px;">
+            <div class="empty">正在加载商品</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-title">
+            <div>
+              <h2>兑换码仓库</h2>
+              <p>只有 `reward_mode = pool` 的商品才会在这里启用</p>
+            </div>
+            <div class="pill" id="poolTag">未选择商品</div>
           </div>
 
-          <div class="field">
-            <label for="noteInput">统一备注</label>
-            <input id="noteInput" type="text" placeholder="可选，例如：6月活动批次" />
-          </div>
+          <div class="stack">
+            <div class="field">
+              <label for="poolItemSelect">仓库商品</label>
+              <select id="poolItemSelect"></select>
+            </div>
 
-          <div class="actions">
-            <button class="primary" id="addCodesBtn" type="button">批量入库</button>
-            <button class="ghost" id="resetInputBtn" type="button">清空输入</button>
-          </div>
+            <div class="field">
+              <label for="codesInput">兑换码</label>
+              <textarea id="codesInput" placeholder="每行一个兑换码"></textarea>
+            </div>
 
-          <div class="subtle" id="addSummary">准备就绪。</div>
+            <div class="field">
+              <label for="noteInput">统一备注</label>
+              <input id="noteInput" type="text" placeholder="可选，例如：6月活动批次" />
+            </div>
+
+            <div class="actions">
+              <button class="primary" id="addCodesBtn" type="button">批量入库</button>
+              <button class="ghost" id="resetInputBtn" type="button">清空输入</button>
+            </div>
+
+            <div class="hint" id="addSummary">准备就绪。</div>
+          </div>
         </div>
       </section>
 
-      <section class="panel">
-        <h2>仓库列表</h2>
-        <div class="stack">
-          <div class="list-actions">
-            <div class="field" style="flex: 1 1 260px;">
+      <section class="stack">
+        <div class="panel">
+          <div class="section-title">
+            <div>
+              <h2>当前商品</h2>
+              <p>保存后会立即生效</p>
+            </div>
+            <div class="actions">
+              <button class="primary" id="saveItemBtn" type="button">保存商品</button>
+              <button class="danger" id="deleteItemBtn" type="button">删除商品</button>
+            </div>
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="itemIdInput">商品 ID</label>
+              <input id="itemIdInput" type="text" placeholder="例如 mystery" />
+              <div class="hint">只支持字母、数字、下划线、短横线。</div>
+            </div>
+            <div class="field">
+              <label for="itemNameInput">商品名称</label>
+              <input id="itemNameInput" type="text" placeholder="例如 神秘盲盒" />
+            </div>
+            <div class="field">
+              <label for="itemPriceInput">积分价格</label>
+              <input id="itemPriceInput" type="number" min="1" step="1" />
+            </div>
+            <div class="field">
+              <label for="itemStockInput">库存</label>
+              <input id="itemStockInput" type="number" step="1" />
+              <div class="hint">填 `-1` 表示无限库存。</div>
+            </div>
+            <div class="field">
+              <label for="rewardModeSelect">发货模式</label>
+              <select id="rewardModeSelect">
+                <option value="manual">manual / 手动核销</option>
+                <option value="pool">pool / 兑换码仓库私发</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="itemColorInput">强调色</label>
+              <input id="itemColorInput" type="text" placeholder="#38bdf8" />
+            </div>
+            <div class="field">
+              <label for="itemEmojiInput">兜底 Emoji</label>
+              <input id="itemEmojiInput" type="text" maxlength="4" placeholder="🎁" />
+              <div class="hint">没上传图片时会显示这个图标。</div>
+            </div>
+            <div class="field">
+              <label>启用状态</label>
+              <label class="toggle">
+                <input id="itemEnabledInput" type="checkbox" checked />
+                <span>启用这个商品</span>
+              </label>
+            </div>
+            <div class="field span-2">
+              <label for="itemDescInput">商品描述</label>
+              <textarea id="itemDescInput" placeholder="显示在商店海报和文本商店里"></textarea>
+            </div>
+            <div class="field span-2">
+              <label for="itemDeliveryInput">兑换说明</label>
+              <textarea id="itemDeliveryInput" placeholder="manual 模式下会回给用户，pool 模式下仅用于后台记录"></textarea>
+            </div>
+          </div>
+
+          <div class="icon-uploader" style="margin-top: 16px;">
+            <div class="icon-preview" id="iconPreview"></div>
+            <div class="stack">
+              <div>
+                <strong style="display:block; margin-bottom: 6px;">商品图标</strong>
+                <div class="hint">直接上传图片文件，不需要填图片地址。支持 png、jpg、jpeg、webp、gif。</div>
+              </div>
+              <div class="actions">
+                <input id="iconFileInput" type="file" accept=".png,.jpg,.jpeg,.webp,.gif" hidden />
+                <button class="secondary" id="uploadIconBtn" type="button">上传图片</button>
+                <button class="ghost" id="removeIconBtn" type="button">移除图片</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-title">
+            <div>
+              <h2>兑换码列表</h2>
+              <p>支持筛选、复制、删除和清空</p>
+            </div>
+          </div>
+
+          <div class="list-actions" style="margin-bottom: 14px;">
+            <div class="field" style="flex: 1 1 240px;">
               <label for="searchInput">筛选</label>
               <input id="searchInput" type="text" placeholder="按兑换码或备注检索" />
             </div>
@@ -469,14 +727,14 @@
             <table>
               <thead>
                 <tr>
-                  <th style="width: 44%;">兑换码</th>
+                  <th style="width: 42%;">兑换码</th>
                   <th style="width: 20%;">备注</th>
                   <th style="width: 18%;">添加时间</th>
-                  <th style="width: 18%;">操作</th>
+                  <th style="width: 20%;">操作</th>
                 </tr>
               </thead>
               <tbody id="codesBody">
-                <tr><td colspan="4" class="empty">正在加载</td></tr>
+                <tr><td colspan="4" class="empty">请选择一个仓库商品</td></tr>
               </tbody>
             </table>
           </div>
@@ -502,31 +760,49 @@
     const state = {
       items: [],
       selectedItemId: "",
+      selectedPoolItemId: "",
       codes: [],
+      isNewItem: false,
     };
     let confirmResolver = null;
 
     const elements = {
       status: document.getElementById("status"),
+      summaryTag: document.getElementById("summaryTag"),
       poolTag: document.getElementById("poolTag"),
-      itemSelect: document.getElementById("itemSelect"),
-      poolSize: document.getElementById("poolSize"),
-      itemPrice: document.getElementById("itemPrice"),
-      itemStock: document.getElementById("itemStock"),
-      statName: document.getElementById("statName"),
-      statPool: document.getElementById("statPool"),
-      statStock: document.getElementById("statStock"),
+      statItems: document.getElementById("statItems"),
+      statPoolItems: document.getElementById("statPoolItems"),
+      statPoolCodes: document.getElementById("statPoolCodes"),
+      itemList: document.getElementById("itemList"),
+      poolItemSelect: document.getElementById("poolItemSelect"),
+      newItemBtn: document.getElementById("newItemBtn"),
+      refreshItemsBtn: document.getElementById("refreshItemsBtn"),
+      saveItemBtn: document.getElementById("saveItemBtn"),
+      deleteItemBtn: document.getElementById("deleteItemBtn"),
+      itemIdInput: document.getElementById("itemIdInput"),
+      itemNameInput: document.getElementById("itemNameInput"),
+      itemPriceInput: document.getElementById("itemPriceInput"),
+      itemStockInput: document.getElementById("itemStockInput"),
+      rewardModeSelect: document.getElementById("rewardModeSelect"),
+      itemColorInput: document.getElementById("itemColorInput"),
+      itemEmojiInput: document.getElementById("itemEmojiInput"),
+      itemEnabledInput: document.getElementById("itemEnabledInput"),
+      itemDescInput: document.getElementById("itemDescInput"),
+      itemDeliveryInput: document.getElementById("itemDeliveryInput"),
+      iconPreview: document.getElementById("iconPreview"),
+      iconFileInput: document.getElementById("iconFileInput"),
+      uploadIconBtn: document.getElementById("uploadIconBtn"),
+      removeIconBtn: document.getElementById("removeIconBtn"),
       codesInput: document.getElementById("codesInput"),
       noteInput: document.getElementById("noteInput"),
+      addCodesBtn: document.getElementById("addCodesBtn"),
+      resetInputBtn: document.getElementById("resetInputBtn"),
       addSummary: document.getElementById("addSummary"),
       searchInput: document.getElementById("searchInput"),
-      codesBody: document.getElementById("codesBody"),
-      addCodesBtn: document.getElementById("addCodesBtn"),
-      refreshItemsBtn: document.getElementById("refreshItemsBtn"),
-      refreshCodesBtn: document.getElementById("refreshCodesBtn"),
       searchBtn: document.getElementById("searchBtn"),
+      refreshCodesBtn: document.getElementById("refreshCodesBtn"),
       clearCodesBtn: document.getElementById("clearCodesBtn"),
-      resetInputBtn: document.getElementById("resetInputBtn"),
+      codesBody: document.getElementById("codesBody"),
       confirmMask: document.getElementById("confirmMask"),
       confirmMessage: document.getElementById("confirmMessage"),
       confirmOkBtn: document.getElementById("confirmOkBtn"),
@@ -560,16 +836,23 @@
       });
     }
 
-    function getSelectedItem() {
-      return state.items.find((item) => item.id === state.selectedItemId) || null;
+    function normalizeBridgePayload(payload) {
+      if (payload && typeof payload === "object" && "status" in payload) {
+        return payload;
+      }
+      return {
+        status: "ok",
+        data: payload && typeof payload === "object" ? payload : {},
+        message: "",
+      };
     }
 
-    function formatStock(value) {
-      const number = Number(value);
-      if (!Number.isFinite(number) || number < 0) {
-        return "无限";
+    function normalizeRequestError(error) {
+      const message = error?.message || "";
+      if (!message || message === "Failed to fetch" || /NetworkError/i.test(message)) {
+        return new Error("接口连接失败，请在 AstrBot 插件页面内打开，并确认插件已成功加载。");
       }
-      return String(number);
+      return error instanceof Error ? error : new Error(String(message || "请求失败。"));
     }
 
     function buildPluginEndpoint(path) {
@@ -592,42 +875,22 @@
       return `/api/plug/${pluginName}/${endpoint}${queryText ? `?${queryText}` : ""}`;
     }
 
-    function normalizeBridgePayload(payload) {
-      if (payload && typeof payload === "object" && "status" in payload) {
-        return payload;
-      }
-      return {
-        status: "ok",
-        data: payload && typeof payload === "object" ? payload : {},
-        message: "",
-      };
-    }
-
-    function normalizeRequestError(error) {
-      const message = error?.message || "";
-      if (!message || message === "Failed to fetch" || /NetworkError/i.test(message)) {
-        return new Error("接口连接失败，请在 AstrBot 插件页面内打开，并确认插件已成功加载。");
-      }
-      return error instanceof Error ? error : new Error(String(message || "请求失败。"));
-    }
-
     async function apiGet(path, params = {}) {
       try {
         if (window.AstrBotPluginPage?.apiGet) {
           const payload = await window.AstrBotPluginPage.apiGet(buildPluginEndpoint(path), params);
-          return normalizeBridgePayload(payload);
+          const normalized = normalizeBridgePayload(payload);
+          if (normalized?.status !== "ok") {
+            throw new Error(normalized?.message || "请求失败。");
+          }
+          return normalized;
         }
 
         const response = await fetch(buildDirectUrl(path, params), {
           method: "GET",
           credentials: "include",
         });
-        let payload = null;
-        try {
-          payload = await response.json();
-        } catch (error) {
-          throw new Error("接口返回了无法解析的数据。");
-        }
+        const payload = await response.json();
         if (!response.ok || payload?.status !== "ok") {
           throw new Error(payload?.message || "请求失败。");
         }
@@ -641,24 +904,20 @@
       try {
         if (window.AstrBotPluginPage?.apiPost) {
           const payload = await window.AstrBotPluginPage.apiPost(buildPluginEndpoint(path), body);
-          return normalizeBridgePayload(payload);
+          const normalized = normalizeBridgePayload(payload);
+          if (normalized?.status !== "ok") {
+            throw new Error(normalized?.message || "请求失败。");
+          }
+          return normalized;
         }
 
         const response = await fetch(buildDirectUrl(path), {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           credentials: "include",
           body: JSON.stringify(body || {}),
         });
-
-        let payload = null;
-        try {
-          payload = await response.json();
-        } catch (error) {
-          throw new Error("接口返回了无法解析的数据。");
-        }
+        const payload = await response.json();
         if (!response.ok || payload?.status !== "ok") {
           throw new Error(payload?.message || "请求失败。");
         }
@@ -668,64 +927,46 @@
       }
     }
 
-    function renderItemSummary() {
-      const item = getSelectedItem();
-      const poolSize = item ? Number(item.pool_size || 0) : 0;
-      elements.poolTag.textContent = item ? `${item.name} · ${poolSize} 条` : "没有可管理商品";
-      elements.poolSize.value = item ? String(poolSize) : "-";
-      elements.itemPrice.value = item ? String(item.price || 0) : "-";
-      elements.itemStock.value = item ? formatStock(item.stock_left) : "-";
-      elements.statName.textContent = item ? item.name : "-";
-      elements.statPool.textContent = item ? String(poolSize) : "0";
-      elements.statStock.textContent = item ? formatStock(item.stock_left) : "-";
-    }
-
-    function renderItemOptions() {
-      const options = state.items
-        .map((item) => `<option value="${item.id}">${item.name} [${item.id}]</option>`)
-        .join("");
-
-      if (!options) {
-        elements.itemSelect.innerHTML = `<option value="">没有 reward_mode=pool 的商品</option>`;
-        state.selectedItemId = "";
-      } else {
-        elements.itemSelect.innerHTML = options;
-        if (!state.items.some((item) => item.id === state.selectedItemId)) {
-          state.selectedItemId = state.items[0].id;
+    async function apiUpload(path, file, params = {}) {
+      try {
+        if (window.AstrBotPluginPage?.apiPost) {
+          const fileData = await readFileAsDataUrl(file);
+          const payload = await window.AstrBotPluginPage.apiPost(buildPluginEndpoint(path), {
+            item_id: params.item_id || "",
+            file_name: file.name || "icon.png",
+            file_data: fileData,
+          });
+          const normalized = normalizeBridgePayload(payload);
+          if (normalized?.status !== "ok") {
+            throw new Error(normalized?.message || "请求失败。");
+          }
+          return normalized;
         }
-        elements.itemSelect.value = state.selectedItemId;
-      }
 
-      renderItemSummary();
+        const form = new FormData();
+        form.append("file0", file);
+        const response = await fetch(buildDirectUrl(path, params), {
+          method: "POST",
+          credentials: "include",
+          body: form,
+        });
+        const payload = await response.json();
+        if (!response.ok || payload?.status !== "ok") {
+          throw new Error(payload?.message || "上传失败。");
+        }
+        return payload;
+      } catch (error) {
+        throw normalizeRequestError(error);
+      }
     }
 
-    function renderCodes() {
-      if (!state.codes.length) {
-        elements.codesBody.innerHTML = `<tr><td colspan="4" class="empty">当前没有兑换码</td></tr>`;
-        return;
-      }
-
-      elements.codesBody.innerHTML = state.codes
-        .map((entry) => {
-          const code = escapeHtml(entry.code || "");
-          const note = escapeHtml(entry.note || "");
-          const createdAt = escapeHtml(entry.created_at || "-");
-          const id = escapeHtml(entry.id || "");
-          return `
-            <tr>
-              <td class="code">${code}</td>
-              <td>${note || "-"}</td>
-              <td>${createdAt}</td>
-              <td>
-                <div class="row-actions">
-                  <button class="ghost" type="button" data-copy="${code}">复制</button>
-                  <button class="danger" type="button" data-delete="${id}">删除</button>
-                </div>
-              </td>
-            </tr>
-          `;
-        })
-        .join("");
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("读取图片失败。"));
+        reader.readAsDataURL(file);
+      });
     }
 
     function escapeHtml(value) {
@@ -737,40 +978,210 @@
         .replaceAll("'", "&#39;");
     }
 
-    async function loadItems(preferKeepSelection = true) {
-      const previousId = state.selectedItemId;
-      const payload = await apiGet("items");
-      state.items = (payload.data?.items || []).filter((item) => item.is_pool);
-
-      if (preferKeepSelection && state.items.some((item) => item.id === previousId)) {
-        state.selectedItemId = previousId;
-      } else {
-        state.selectedItemId = state.items[0]?.id || "";
+    function formatStock(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number < 0) {
+        return "无限";
       }
-
-      renderItemOptions();
+      return String(number);
     }
 
-    async function loadCodes() {
-      const item = getSelectedItem();
-      if (!item) {
-        state.codes = [];
-        renderCodes();
-        renderItemSummary();
+    function currentItem() {
+      return state.items.find((item) => item.id === state.selectedItemId) || null;
+    }
+
+    function currentPoolItem() {
+      return state.items.find((item) => item.id === state.selectedPoolItemId) || null;
+    }
+
+    function colorOf(item) {
+      return item?.color && /^#[0-9a-fA-F]{6}$/.test(item.color) ? item.color : "#64748b";
+    }
+
+    function renderIconThumb(item) {
+      const color = colorOf(item);
+      if (item?.icon_url) {
+        return `<div class="item-thumb" style="background:${color};"><img src="${escapeHtml(item.icon_url)}" alt="" /></div>`;
+      }
+      return `<div class="item-thumb" style="background:${color};">${escapeHtml(item?.emoji || "🎁")}</div>`;
+    }
+
+    function renderIconPreview(item) {
+      const color = colorOf(item);
+      if (item?.icon_url) {
+        elements.iconPreview.style.background = color;
+        elements.iconPreview.innerHTML = `<img src="${escapeHtml(item.icon_url)}" alt="" />`;
+        return;
+      }
+      elements.iconPreview.style.background = color;
+      elements.iconPreview.textContent = item?.emoji || "🎁";
+    }
+
+    function renderSummary() {
+      const total = state.items.length;
+      const poolItems = state.items.filter((item) => item.is_pool);
+      const poolItem = currentPoolItem();
+      elements.statItems.textContent = String(total);
+      elements.statPoolItems.textContent = String(poolItems.length);
+      elements.statPoolCodes.textContent = poolItem ? String(poolItem.pool_size || 0) : "0";
+      elements.summaryTag.textContent = total ? `共 ${total} 个商品` : "暂无商品";
+      elements.poolTag.textContent = poolItem ? `${poolItem.name} · ${poolItem.pool_size || 0} 条兑换码` : "没有仓库商品";
+    }
+
+    function renderItemList() {
+      if (!state.items.length) {
+        elements.itemList.innerHTML = `<div class="empty">还没有商品，先点“新建商品”吧。</div>`;
+        renderSummary();
         return;
       }
 
-      const keyword = elements.searchInput.value.trim();
+      elements.itemList.innerHTML = state.items.map((item) => {
+        const desc = escapeHtml(item.description || "暂无描述");
+        const active = item.id === state.selectedItemId ? " active" : "";
+        const modeBadge = item.is_pool ? `<span class="badge pool">pool</span>` : `<span class="badge">manual</span>`;
+        const enabledBadge = item.enabled ? `<span class="badge">启用</span>` : `<span class="badge">停用</span>`;
+        return `
+          <button class="item-card${active}" type="button" data-select-item="${escapeHtml(item.id)}">
+            ${renderIconThumb(item)}
+            <div class="item-meta">
+              <strong>${escapeHtml(item.name)}</strong>
+              <div class="meta-row">
+                ${modeBadge}
+                ${enabledBadge}
+                <span>ID: ${escapeHtml(item.id)}</span>
+              </div>
+              <div class="meta-row">
+                <span>${escapeHtml(String(item.price || 0))} 积分</span>
+                <span>库存 ${escapeHtml(formatStock(item.stock_left))}</span>
+              </div>
+              <div class="desc">${desc}</div>
+            </div>
+          </button>
+        `;
+      }).join("");
+      renderSummary();
+    }
+
+    function renderPoolSelect() {
+      const poolItems = state.items.filter((item) => item.is_pool);
+      if (!poolItems.length) {
+        elements.poolItemSelect.innerHTML = `<option value="">没有 reward_mode=pool 的商品</option>`;
+        state.selectedPoolItemId = "";
+        renderSummary();
+        return;
+      }
+      if (!poolItems.some((item) => item.id === state.selectedPoolItemId)) {
+        state.selectedPoolItemId = poolItems[0].id;
+      }
+      elements.poolItemSelect.innerHTML = poolItems
+        .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} [${escapeHtml(item.id)}]</option>`)
+        .join("");
+      elements.poolItemSelect.value = state.selectedPoolItemId;
+      renderSummary();
+    }
+
+    function renderEditor(item) {
+      const target = item || {
+        id: "",
+        name: "",
+        price: 100,
+        stock: -1,
+        reward_mode: "manual",
+        color: "#38bdf8",
+        emoji: "🎁",
+        description: "",
+        delivery: "",
+        enabled: true,
+        icon_url: "",
+      };
+      elements.itemIdInput.value = target.id || "";
+      elements.itemNameInput.value = target.name || "";
+      elements.itemPriceInput.value = String(target.price ?? 100);
+      elements.itemStockInput.value = String(target.stock ?? -1);
+      elements.rewardModeSelect.value = target.reward_mode || "manual";
+      elements.itemColorInput.value = target.color || "";
+      elements.itemEmojiInput.value = target.emoji || "🎁";
+      elements.itemEnabledInput.checked = target.enabled !== false;
+      elements.itemDescInput.value = target.description || "";
+      elements.itemDeliveryInput.value = target.delivery || "";
+      renderIconPreview(target);
+      elements.deleteItemBtn.disabled = state.isNewItem || !state.selectedItemId;
+      elements.uploadIconBtn.disabled = state.isNewItem || !state.selectedItemId;
+      elements.removeIconBtn.disabled = state.isNewItem || !state.selectedItemId || !target.icon_url;
+    }
+
+    function renderCodes() {
+      if (!state.codes.length) {
+        elements.codesBody.innerHTML = `<tr><td colspan="4" class="empty">当前没有兑换码</td></tr>`;
+        return;
+      }
+      elements.codesBody.innerHTML = state.codes.map((entry) => `
+        <tr>
+          <td class="code">${escapeHtml(entry.code || "")}</td>
+          <td>${escapeHtml(entry.note || "-")}</td>
+          <td>${escapeHtml(entry.created_at || "-")}</td>
+          <td>
+            <div class="inline">
+              <button class="ghost" type="button" data-copy="${escapeHtml(entry.code || "")}">复制</button>
+              <button class="danger" type="button" data-delete="${escapeHtml(entry.id || "")}">删除</button>
+            </div>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    function resetEditorToNew() {
+      state.isNewItem = true;
+      state.selectedItemId = "";
+      renderEditor(null);
+    }
+
+    async function loadItems(preferKeep = true) {
+      const previousSelected = state.selectedItemId;
+      const previousPool = state.selectedPoolItemId;
+      const payload = await apiGet("items");
+      state.items = payload.data?.items || [];
+
+      if (preferKeep && previousSelected && state.items.some((item) => item.id === previousSelected)) {
+        state.selectedItemId = previousSelected;
+        state.isNewItem = false;
+      } else if (!state.isNewItem) {
+        state.selectedItemId = state.items[0]?.id || "";
+      }
+
+      if (preferKeep && previousPool && state.items.some((item) => item.id === previousPool && item.is_pool)) {
+        state.selectedPoolItemId = previousPool;
+      } else {
+        state.selectedPoolItemId = state.items.find((item) => item.is_pool)?.id || "";
+      }
+
+      renderItemList();
+      renderPoolSelect();
+      renderEditor(state.isNewItem ? null : currentItem());
+    }
+
+    async function loadCodes() {
+      const item = currentPoolItem();
+      if (!item) {
+        state.codes = [];
+        renderCodes();
+        renderSummary();
+        return;
+      }
       const params = { item_id: item.id };
+      const keyword = elements.searchInput.value.trim();
       if (keyword) {
         params.keyword = keyword;
       }
-
       const payload = await apiGet("codes", params);
       state.codes = payload.data?.codes || [];
-      const latestItem = payload.data?.item || item;
-      state.items = state.items.map((entry) => (entry.id === latestItem.id ? latestItem : entry));
-      renderItemSummary();
+      const latest = payload.data?.item;
+      if (latest?.id) {
+        state.items = state.items.map((entry) => (entry.id === latest.id ? latest : entry));
+      }
+      renderItemList();
+      renderPoolSelect();
+      renderEditor(state.isNewItem ? null : currentItem());
       renderCodes();
     }
 
@@ -783,19 +1194,122 @@
       }
     }
 
-    async function handleAddCodes() {
-      const item = getSelectedItem();
-      if (!item) {
-        showStatus("请先配置一个 reward_mode=pool 的商品。", "error");
+    function collectEditorPayload() {
+      return {
+        original_id: state.isNewItem ? "" : state.selectedItemId,
+        id: elements.itemIdInput.value.trim(),
+        name: elements.itemNameInput.value.trim(),
+        price: Number(elements.itemPriceInput.value || 0),
+        stock: Number(elements.itemStockInput.value || -1),
+        reward_mode: elements.rewardModeSelect.value,
+        color: elements.itemColorInput.value.trim(),
+        emoji: elements.itemEmojiInput.value.trim() || "🎁",
+        enabled: elements.itemEnabledInput.checked,
+        description: elements.itemDescInput.value.trim(),
+        delivery: elements.itemDeliveryInput.value.trim(),
+        icon_path: currentItem()?.icon_path || "",
+      };
+    }
+
+    async function handleSaveItem() {
+      const payload = collectEditorPayload();
+      if (!payload.id) {
+        showStatus("请填写商品 ID。", "error");
         return;
       }
+      if (!payload.name) {
+        showStatus("请填写商品名称。", "error");
+        return;
+      }
+      elements.saveItemBtn.disabled = true;
+      try {
+        const response = await apiPost("items/save", payload);
+        state.isNewItem = false;
+        state.selectedItemId = response.data?.item?.id || payload.id;
+        if (response.data?.item?.is_pool) {
+          state.selectedPoolItemId = response.data.item.id;
+        }
+        await refreshAll(response.message || "商品已保存。");
+      } catch (error) {
+        showStatus(error.message || "保存失败。", "error");
+      } finally {
+        elements.saveItemBtn.disabled = false;
+      }
+    }
 
+    async function handleDeleteItem() {
+      const item = currentItem();
+      if (!item) {
+        showStatus("请先选择一个商品。", "error");
+        return;
+      }
+      const confirmed = await askConfirm(`确认删除商品“${item.name}”吗？\n商品库存、兑换码仓库和图标文件也会一并删除。`);
+      if (!confirmed) {
+        return;
+      }
+      try {
+        const response = await apiPost("items/delete", { item_id: item.id });
+        state.selectedItemId = "";
+        state.isNewItem = false;
+        await refreshAll(response.message || "商品已删除。");
+      } catch (error) {
+        showStatus(error.message || "删除失败。", "error");
+      }
+    }
+
+    async function handleUploadIcon() {
+      const item = currentItem();
+      const file = elements.iconFileInput.files?.[0];
+      if (!item) {
+        showStatus("请先保存商品，再上传图片。", "error");
+        return;
+      }
+      if (!file) {
+        showStatus("请先选择一张图片。", "error");
+        return;
+      }
+      elements.uploadIconBtn.disabled = true;
+      try {
+        const response = await apiUpload("items/icon/upload", file, { item_id: item.id });
+        state.items = state.items.map((entry) => (entry.id === item.id ? response.data?.item || entry : entry));
+        await refreshAll(response.message || "商品图标已上传。");
+      } catch (error) {
+        showStatus(error.message || "上传失败。", "error");
+      } finally {
+        elements.uploadIconBtn.disabled = false;
+        elements.iconFileInput.value = "";
+      }
+    }
+
+    async function handleRemoveIcon() {
+      const item = currentItem();
+      if (!item?.icon_url) {
+        return;
+      }
+      const confirmed = await askConfirm(`确认移除 ${item.name} 的图片图标吗？`);
+      if (!confirmed) {
+        return;
+      }
+      try {
+        const response = await apiPost("items/icon/delete", { item_id: item.id });
+        state.items = state.items.map((entry) => (entry.id === item.id ? response.data?.item || entry : entry));
+        await refreshAll(response.message || "商品图标已删除。");
+      } catch (error) {
+        showStatus(error.message || "移除失败。", "error");
+      }
+    }
+
+    async function handleAddCodes() {
+      const item = currentPoolItem();
+      if (!item) {
+        showStatus("请先选择一个 pool 商品。", "error");
+        return;
+      }
       const codesText = elements.codesInput.value.trim();
       if (!codesText) {
         showStatus("请输入兑换码内容。", "error");
         return;
       }
-
       elements.addCodesBtn.disabled = true;
       try {
         const payload = await apiPost("codes/bulk-add", {
@@ -803,13 +1317,9 @@
           codes_text: codesText,
           note: elements.noteInput.value.trim(),
         });
-
         const data = payload.data || {};
-        const addedCount = Number(data.added_count || 0);
-        const skippedExisting = Number(data.skipped_existing || 0);
-        const skippedDuplicateInput = Number(data.skipped_duplicate_input || 0);
         elements.addSummary.textContent =
-          `本次新增 ${addedCount} 个，已存在跳过 ${skippedExisting} 个，输入重复跳过 ${skippedDuplicateInput} 个。`;
+          `本次新增 ${Number(data.added_count || 0)} 个，已存在跳过 ${Number(data.skipped_existing || 0)} 个，输入重复跳过 ${Number(data.skipped_duplicate_input || 0)} 个。`;
         elements.codesInput.value = "";
         await refreshAll(payload.message || "兑换码已入库。");
       } catch (error) {
@@ -820,7 +1330,7 @@
     }
 
     async function handleDeleteCode(rewardId) {
-      const item = getSelectedItem();
+      const item = currentPoolItem();
       if (!item || !rewardId) {
         return;
       }
@@ -828,7 +1338,6 @@
       if (!confirmed) {
         return;
       }
-
       try {
         const payload = await apiPost("codes/delete", { item_id: item.id, reward_id: rewardId });
         await refreshAll(payload.message || "兑换码已删除。");
@@ -838,7 +1347,7 @@
     }
 
     async function handleClearCodes() {
-      const item = getSelectedItem();
+      const item = currentPoolItem();
       if (!item) {
         return;
       }
@@ -846,7 +1355,6 @@
       if (!confirmed) {
         return;
       }
-
       try {
         const payload = await apiPost("codes/clear", { item_id: item.id });
         await refreshAll(payload.message || "兑换码已清空。");
@@ -879,13 +1387,9 @@
       }
     }
 
-    elements.itemSelect.addEventListener("change", async (event) => {
-      state.selectedItemId = event.target.value;
-      try {
-        await loadCodes();
-      } catch (error) {
-        showStatus(error.message || "切换商品失败。", "error");
-      }
+    elements.newItemBtn.addEventListener("click", () => {
+      hideStatus();
+      resetEditorToNew();
     });
 
     elements.refreshItemsBtn.addEventListener("click", async () => {
@@ -894,6 +1398,39 @@
       } catch (error) {
         showStatus(error.message || "刷新失败。", "error");
       }
+    });
+
+    elements.saveItemBtn.addEventListener("click", handleSaveItem);
+    elements.deleteItemBtn.addEventListener("click", handleDeleteItem);
+
+    elements.uploadIconBtn.addEventListener("click", () => {
+      elements.iconFileInput.click();
+    });
+
+    elements.iconFileInput.addEventListener("change", async () => {
+      if (elements.iconFileInput.files?.length) {
+        await handleUploadIcon();
+      }
+    });
+
+    elements.removeIconBtn.addEventListener("click", handleRemoveIcon);
+
+    elements.poolItemSelect.addEventListener("change", async (event) => {
+      state.selectedPoolItemId = event.target.value;
+      try {
+        await loadCodes();
+      } catch (error) {
+        showStatus(error.message || "切换仓库商品失败。", "error");
+      }
+    });
+
+    elements.addCodesBtn.addEventListener("click", handleAddCodes);
+
+    elements.resetInputBtn.addEventListener("click", () => {
+      elements.codesInput.value = "";
+      elements.noteInput.value = "";
+      elements.addSummary.textContent = "输入区已清空。";
+      hideStatus();
     });
 
     elements.refreshCodesBtn.addEventListener("click", async () => {
@@ -927,29 +1464,25 @@
       }
     });
 
-    elements.addCodesBtn.addEventListener("click", handleAddCodes);
-
     elements.clearCodesBtn.addEventListener("click", handleClearCodes);
 
-    elements.resetInputBtn.addEventListener("click", () => {
-      elements.codesInput.value = "";
-      elements.noteInput.value = "";
-      elements.addSummary.textContent = "输入区已清空。";
-      hideStatus();
-    });
-
-    elements.confirmOkBtn.addEventListener("click", () => {
-      closeConfirm(true);
-    });
-
-    elements.confirmCancelBtn.addEventListener("click", () => {
-      closeConfirm(false);
-    });
-
+    elements.confirmOkBtn.addEventListener("click", () => closeConfirm(true));
+    elements.confirmCancelBtn.addEventListener("click", () => closeConfirm(false));
     elements.confirmMask.addEventListener("click", (event) => {
       if (event.target === elements.confirmMask) {
         closeConfirm(false);
       }
+    });
+
+    elements.itemList.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-select-item]");
+      if (!button) {
+        return;
+      }
+      state.selectedItemId = button.getAttribute("data-select-item") || "";
+      state.isNewItem = false;
+      renderItemList();
+      renderEditor(currentItem());
     });
 
     elements.codesBody.addEventListener("click", async (event) => {
@@ -958,7 +1491,6 @@
         await handleCopyCode(copyCode);
         return;
       }
-
       const rewardId = event.target.getAttribute("data-delete");
       if (rewardId) {
         await handleDeleteCode(rewardId);

@@ -7,14 +7,20 @@
   "state_path": {
     "description": "状态文件路径",
     "type": "string",
-    "default": "data/state.json",
-    "hint": "保存积分、签到、库存、兑换码仓库、兑换记录等数据。相对路径会放在插件目录下。"
+    "default": "",
+    "hint": "留空时自动使用 AstrBot 稳定插件数据目录，避免插件重装后积分、库存和兑换码数据丢失。"
   },
   "poster_path": {
     "description": "商店海报缓存路径",
     "type": "string",
-    "default": "data/shop_poster.png",
-    "hint": "发送商店命令时动态生成的商品海报输出位置。"
+    "default": "",
+    "hint": "留空时自动使用 AstrBot 稳定插件数据目录。"
+  },
+  "item_icon_dir": {
+    "description": "商品图标目录",
+    "type": "string",
+    "default": "",
+    "hint": "留空时自动使用 AstrBot 稳定插件数据目录下的 item_icons。"
   },
   "signin_min_points": {
     "description": "签到最少积分",

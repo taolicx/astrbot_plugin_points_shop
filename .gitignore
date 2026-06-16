@@ -3,3 +3,5 @@ __pycache__/
 data/state.json
 data/shop_poster.png
 data/
+_release/
+CHECK_REPORT.md

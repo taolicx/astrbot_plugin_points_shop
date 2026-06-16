@@ -1,35 +1,40 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import mimetypes
 import random
 import re
-import time
-from datetime import datetime
+import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.message.message_event_result import MessageChain
-from quart import jsonify, request
+from quart import jsonify, request, send_file
 
 try:
-    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 except Exception:  # pragma: no cover - runtime dependency guard
     Image = None
     ImageDraw = None
     ImageFilter = None
     ImageFont = None
+    ImageOps = None
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.8"
+PLUGIN_VERSION = "0.1.12"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
+CHINA_TZ = timezone(timedelta(hours=8))
 
 MOVE_ALIASES = {
     "石头": "rock",
@@ -75,14 +80,21 @@ class PointsShopPlugin(Star):
         self.context = context
         self.config = config or {}
         self.plugin_dir = Path(__file__).resolve().parent
-        self.state_path = self._resolve_path(self._cfg_str("state_path", "data/state.json"))
-        self.poster_path = self._resolve_path(self._cfg_str("poster_path", "data/shop_poster.png"))
+        self.data_dir = Path(str(StarTools.get_data_dir(PLUGIN_NAME)))
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.legacy_data_dir = self.plugin_dir / "data"
+        self.state_path = self._resolve_path(self._cfg_path_str("state_path", str(self.data_dir / "state.json")))
+        self.poster_path = self._resolve_path(self._cfg_path_str("poster_path", str(self.data_dir / "shop_poster.png")))
+        self.item_icon_dir = self._resolve_path(self._cfg_path_str("item_icon_dir", str(self.data_dir / "item_icons")))
         self.state: dict[str, Any] = self._default_state()
         self._lock = asyncio.Lock()
+        self._handled_message_keys: dict[str, float] = {}
 
     async def initialize(self):
+        self._migrate_legacy_storage()
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.poster_path.parent.mkdir(parents=True, exist_ok=True)
+        self.item_icon_dir.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(self._load_state)
         await asyncio.to_thread(self._sync_stock_from_config)
         await asyncio.to_thread(self._save_state)
@@ -118,11 +130,13 @@ class PointsShopPlugin(Star):
             return
 
         async with self._lock:
+            if not self._begin_message_action(event, "sign_in"):
+                return
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
             self._remember_user(event)
 
-            today = datetime.now().strftime("%Y-%m-%d")
+            today = self._today()
             signins = self.state.setdefault("signins", {})
             last_day = str(signins.get(user_id) or "")
             if last_day == today:
@@ -207,6 +221,8 @@ class PointsShopPlugin(Star):
             return
 
         async with self._lock:
+            if not self._begin_message_action(event, "rps"):
+                return
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
             self._remember_user(event)
@@ -254,10 +270,10 @@ class PointsShopPlugin(Star):
             user_id = self._sender_id(event)
             balance = self._balance(group_sid, user_id)
             items = self._items()
-            stocks = dict(self.state.setdefault("stock", {}))
+            stocks = {str(item.get("id") or ""): self._stock_left(item) for item in items}
 
         if not items:
-            await self._reply_and_stop(event, "兑换商城还没有配置商品，请先在插件设置里添加 items。")
+            await self._reply_and_stop(event, "兑换商城还没有商品，请先到插件页面 code_manager 中添加商品。")
             return
 
         if Image is None:
@@ -291,7 +307,17 @@ class PointsShopPlugin(Star):
 
         qty = max(1, qty)
         reward_entries: list[dict[str, Any]] = []
+        record: dict[str, Any] | None = None
+        pool_mode = False
+        delivery_failed = False
+        item_name = ""
+        cost = 0
+        new_balance = 0
+        remaining_stock_before = -1
+
         async with self._lock:
+            if not self._begin_message_action(event, "exchange"):
+                return
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
             self._remember_user(event)
@@ -301,6 +327,7 @@ class PointsShopPlugin(Star):
                 return
 
             item_id = str(item.get("id") or "")
+            item_name = str(item.get("name") or item_id)
             price = max(0, int(item.get("price") or 0))
             cost = price * qty
             if cost <= 0:
@@ -317,35 +344,57 @@ class PointsShopPlugin(Star):
                 await self._reply_and_stop(event, f"库存不足，当前剩余：{stock}")
                 return
 
-            if self._reward_mode(item) == "pool":
+            remaining_stock_before = self._stock_remaining(item)
+
+            pool_mode = self._reward_mode(item) == "pool"
+            pool: list[dict[str, Any]] = []
+            if pool_mode:
                 pool = self._reward_pool(item_id)
                 if len(pool) < qty:
                     await self._reply_and_stop(event, f"该商品的兑换码仓库不足，当前可发送：{len(pool)}")
                     return
 
             self._add_points(group_sid, user_id, -cost)
-            if stock >= 0:
-                self.state.setdefault("stock", {})[item_id] = stock - qty
-            if self._reward_mode(item) == "pool":
-                pool = self._reward_pool(item_id)
+            stock_map = self.state.setdefault("stock", {})
+            if remaining_stock_before >= 0:
+                stock_map[item_id] = max(0, remaining_stock_before - qty)
+
+            record = self._build_exchange_record(event, item, qty, cost)
+            if pool_mode:
                 reward_entries = [pool.pop(0) for _ in range(qty)]
-            record = self._append_exchange_record(event, item, qty, cost)
+                self._append_exchange_record(record)
+                self._save_state()
+            else:
+                self._append_exchange_record(record)
+                self._save_state()
+
             new_balance = self._balance(group_sid, user_id)
-            self._save_state()
 
-        private_ok = True
-        if reward_entries:
-            private_ok = await self._send_reward_private(event, item, record, reward_entries)
+        if pool_mode and reward_entries and record is not None:
+            if not await self._send_reward_private(event, item, record, reward_entries):
+                async with self._lock:
+                    pool = self._reward_pool(str(item.get("id") or ""))
+                    pool[:0] = reward_entries
+                    self._add_points(self._group_sid(event), self._sender_id(event), cost)
+                    if remaining_stock_before >= 0:
+                        self.state.setdefault("stock", {})[str(item.get("id") or "")] = remaining_stock_before
+                    self._remove_exchange_record(str(record.get("order_id") or ""))
+                    self._save_state()
+                    new_balance = self._balance(self._group_sid(event), self._sender_id(event))
+                delivery_failed = True
 
-        if reward_entries:
-            private_text = "奖励已私发，请查收私聊。" if private_ok else "奖励发送失败，请联系管理员补发。"
+        if delivery_failed:
+            await self._reply_and_stop(event, f"兑换失败：私聊发送奖励失败。本次未扣除积分，请确认已打开私聊后再试。\n当前积分：{new_balance}")
+            return
+
+        if pool_mode and reward_entries and record is not None:
             await self._reply_and_stop(
                 event,
                 f"兑换成功！\n"
-                f"商品：{item.get('name')} x{qty}\n"
+                f"商品：{item_name} x{qty}\n"
                 f"消耗：{cost} 积分\n"
                 f"订单号：{record['order_id']}\n"
-                f"{private_text}\n"
+                f"奖励已私发，请查收私聊。\n"
                 f"剩余积分：{new_balance}",
             )
             return
@@ -355,9 +404,9 @@ class PointsShopPlugin(Star):
         await self._reply_and_stop(
             event,
             f"兑换成功！\n"
-            f"商品：{item.get('name')} x{qty}\n"
+            f"商品：{item_name} x{qty}\n"
             f"消耗：{cost} 积分\n"
-            f"订单号：{record['order_id']}\n"
+            f"订单号：{record['order_id'] if record else ''}\n"
             f"剩余积分：{new_balance}{delivery_text}",
         )
     @filter.command("兑换记录", alias={"我的兑换", "订单"}, priority=100)
@@ -493,6 +542,174 @@ class PointsShopPlugin(Star):
         async with self._lock:
             items = [self._serialize_admin_item(item) for item in self._items()]
         return self._api_ok({"items": items})
+
+    async def api_admin_items_save(self):
+        body = await self._request_json()
+        original_id = str(body.get("original_id") or body.get("old_id") or "").strip()
+        item_id = str(body.get("id") or "").strip()
+        name = str(body.get("name") or "").strip()
+        if not item_id or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", item_id):
+            return self._api_error("商品 ID 只能使用 1-64 位字母、数字、下划线或短横线。")
+        if not name:
+            return self._api_error("商品名称不能为空。")
+
+        try:
+            price = max(1, int(body.get("price") or 1))
+            stock = int(body.get("stock", -1) if body.get("stock", -1) is not None else -1)
+        except Exception:
+            return self._api_error("价格或库存格式不正确。")
+
+        reward_mode = str(body.get("reward_mode") or "manual").strip().lower()
+        if reward_mode not in {"manual", "pool"}:
+            reward_mode = "manual"
+
+        item_data = {
+            "id": item_id,
+            "name": name,
+            "price": price,
+            "stock": stock,
+            "emoji": str(body.get("emoji") or "🎁").strip()[:4] or "🎁",
+            "icon_path": self._normalize_icon_path(body.get("icon_path") or ""),
+            "description": str(body.get("description") or "").strip(),
+            "delivery": str(body.get("delivery") or "").strip(),
+            "color": str(body.get("color") or "").strip(),
+            "reward_mode": reward_mode,
+            "enabled": self._to_bool(body.get("enabled", True), True),
+        }
+
+        async with self._lock:
+            items = list(self.state.setdefault("items", []))
+            stock_map = self.state.setdefault("stock", {})
+            reward_pool = self.state.setdefault("reward_pool", {})
+            target_index = -1
+            original_index = -1
+            for index, item in enumerate(items):
+                current_id = str(item.get("id") or "")
+                if current_id == item_id:
+                    target_index = index
+                if current_id == original_id:
+                    original_index = index
+
+            if not original_id and target_index >= 0:
+                return self._api_error("商品 ID 已存在，请换一个。")
+            if original_id and original_id != item_id and target_index >= 0:
+                return self._api_error("新的商品 ID 已存在，请换一个。")
+
+            old_stock: int | None = None
+            if original_index >= 0:
+                old_item = items[original_index]
+                old_item_id = str(old_item.get("id") or "")
+                old_stock = int(old_item.get("stock", -1) if old_item.get("stock", -1) is not None else -1)
+                items[original_index] = item_data
+                if old_item_id and old_item_id != item_id:
+                    if old_item_id in stock_map:
+                        stock_map[item_id] = stock_map.pop(old_item_id)
+                    if old_item_id in reward_pool:
+                        reward_pool[item_id] = reward_pool.pop(old_item_id)
+                    renamed_icon = self._rename_item_icon_file(old_item_id, item_id)
+                    if renamed_icon is not None:
+                        item_data["icon_path"] = renamed_icon
+            else:
+                items.append(item_data)
+                reward_pool.setdefault(item_id, [])
+
+            reward_pool.setdefault(item_id, [])
+            if stock < 0:
+                stock_map[item_id] = -1
+            elif old_stock is None or stock != old_stock or item_id not in stock_map:
+                stock_map[item_id] = stock
+
+            self.state["items"] = self._normalize_items_state(items)
+            self._save_state()
+            item = self._find_item(item_id)
+            data = {"item": self._serialize_admin_item(item)} if item else {}
+        return self._api_ok(data, "商品已保存。")
+
+    async def api_admin_items_delete(self):
+        body = await self._request_json()
+        item_id = str(body.get("item_id") or body.get("id") or "").strip()
+        if not item_id:
+            return self._api_error("缺少商品 ID。")
+
+        async with self._lock:
+            items = list(self.state.setdefault("items", []))
+            next_items = [item for item in items if str(item.get("id") or "") != item_id]
+            if len(next_items) == len(items):
+                return self._api_error("没有找到要删除的商品。", 404)
+
+            self.state["items"] = next_items
+            self.state.setdefault("stock", {}).pop(item_id, None)
+            self.state.setdefault("reward_pool", {}).pop(item_id, None)
+            self._delete_item_icon_file(item_id)
+            self._save_state()
+        return self._api_ok({}, "商品已删除。")
+
+    async def api_admin_item_icon_upload(self):
+        item_id = str(request.args.get("item_id", "") or "").strip()
+        body: dict[str, Any] = {}
+        try:
+            if str(getattr(request, "mimetype", "") or "").lower().startswith("application/json"):
+                body = await self._request_json()
+        except Exception:
+            body = {}
+        if not item_id:
+            item_id = str(body.get("item_id") or "").strip()
+        if not item_id:
+            return self._api_error("缺少 item_id 参数。")
+
+        safe_item_id = re.sub(r"[^a-zA-Z0-9_-]+", "", item_id)
+        if not safe_item_id:
+            return self._api_error("商品 ID 不合法。")
+        async with self._lock:
+            item = self._find_item(item_id)
+            if not item:
+                return self._api_error("没有找到这个商品。", 404)
+
+            try:
+                save_path = await self._save_uploaded_icon_file(safe_item_id, body)
+            except ValueError as exc:
+                return self._api_error(str(exc))
+            if save_path is None:
+                return self._api_error("没有收到上传文件。")
+
+            self._set_item_icon_path(item_id, str(save_path.relative_to(self.data_dir)).replace("\\", "/"))
+            self._save_state()
+            item = self._find_item(item_id)
+            data = {"item": self._serialize_admin_item(item)} if item else {}
+        return self._api_ok(data, "商品图标已上传。")
+
+    async def api_admin_item_icon_delete(self):
+        body = await self._request_json()
+        item_id = str(body.get("item_id") or "").strip()
+        if not item_id:
+            return self._api_error("缺少商品 ID。")
+
+        async with self._lock:
+            item = self._find_item(item_id)
+            if not item:
+                return self._api_error("没有找到这个商品。", 404)
+            self._delete_item_icon_file(item_id)
+            self._set_item_icon_path(item_id, "")
+            self._save_state()
+            item = self._find_item(item_id)
+            data = {"item": self._serialize_admin_item(item)} if item else {}
+        return self._api_ok(data, "商品图标已删除。")
+
+    async def api_admin_item_icon_get(self):
+        item_id = str(request.args.get("item_id", "") or "").strip()
+        if not item_id:
+            return self._api_error("缺少 item_id 参数。")
+
+        item = self._find_item(item_id)
+        if not item:
+            return self._api_error("没有找到这个商品。", 404)
+
+        icon_path = self._item_icon_path(item)
+        if icon_path is None or not icon_path.exists():
+            return self._api_error("该商品没有上传图标。", 404)
+
+        mime_type, _ = mimetypes.guess_type(str(icon_path))
+        return await send_file(icon_path, mimetype=mime_type or "application/octet-stream")
 
     async def api_admin_codes(self):
         item_key = str(request.args.get("item_id", "") or "").strip()
@@ -637,6 +854,11 @@ class PointsShopPlugin(Star):
     def _register_web_apis(self) -> None:
         routes = [
             ("items", self.api_admin_items, ["GET"], "积分商城兑换码管理：商品列表"),
+            ("items/save", self.api_admin_items_save, ["POST"], "积分商城商品管理：新增或编辑商品"),
+            ("items/delete", self.api_admin_items_delete, ["POST"], "积分商城商品管理：删除商品"),
+            ("items/icon/upload", self.api_admin_item_icon_upload, ["POST"], "积分商城商品管理：上传商品图标"),
+            ("items/icon/delete", self.api_admin_item_icon_delete, ["POST"], "积分商城商品管理：删除商品图标"),
+            ("items/icon/get", self.api_admin_item_icon_get, ["GET"], "积分商城商品管理：读取商品图标"),
             ("codes", self.api_admin_codes, ["GET"], "积分商城兑换码管理：查询兑换码"),
             ("codes/bulk-add", self.api_admin_codes_bulk_add, ["POST"], "积分商城兑换码管理：批量添加兑换码"),
             ("codes/delete", self.api_admin_codes_delete, ["POST"], "积分商城兑换码管理：删除兑换码"),
@@ -677,15 +899,21 @@ class PointsShopPlugin(Star):
     def _serialize_admin_item(self, item: dict[str, Any]) -> dict[str, Any]:
         item_id = str(item.get("id") or "")
         mode = self._reward_mode(item)
+        icon_path = self._normalize_icon_path(item.get("icon_path") or "")
         return {
             "id": item_id,
             "name": str(item.get("name") or ""),
             "price": int(item.get("price") or 0),
+            "stock": int(item.get("stock", -1) if item.get("stock", -1) is not None else -1),
             "description": str(item.get("description") or ""),
             "delivery": str(item.get("delivery") or ""),
             "emoji": str(item.get("emoji") or ""),
+            "icon_path": icon_path,
+            "icon_url": self._item_icon_url(item_id, icon_path),
             "reward_mode": mode,
             "reward_mode_label": "兑换码仓库私发" if mode == "pool" else "手动核销",
+            "color": str(item.get("color") or ""),
+            "enabled": self._to_bool(item.get("enabled", True), True),
             "pool_size": len(self._reward_pool(item_id)),
             "stock_left": self._stock_left(item),
             "is_pool": mode == "pool",
@@ -706,6 +934,7 @@ class PointsShopPlugin(Star):
             "signins": {},
             "streaks": {},
             "stock": {},
+            "items": [],
             "reward_pool": {},
             "exchange_records": [],
             "game_records": [],
@@ -728,6 +957,7 @@ class PointsShopPlugin(Star):
         self.state["signins"] = self._merge_signin_state(self.state.get("signins"))
         self.state["streaks"] = self._merge_streak_state(self.state.get("streaks"))
         self.state["profiles"] = self._merge_profile_state(self.state.get("profiles"))
+        self.state["items"] = self._normalize_items_state(self.state.get("items"))
         self.state["reward_pool"] = self._normalize_reward_pool_state(self.state.get("reward_pool"))
 
     def _merge_balance_state(self, raw: Any) -> dict[str, int]:
@@ -812,7 +1042,55 @@ class PointsShopPlugin(Star):
         except Exception as exc:
             logger.warning(f"[PointsShop] save state failed: {exc}")
 
+    def _migrate_legacy_storage(self) -> None:
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            if not self.state_path.exists():
+                legacy_state = self.legacy_data_dir / "state.json"
+                if legacy_state.exists():
+                    self.state_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(legacy_state, self.state_path)
+
+            legacy_poster = self.legacy_data_dir / "shop_poster.png"
+            if not self.poster_path.exists() and legacy_poster.exists():
+                self.poster_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(legacy_poster, self.poster_path)
+
+            legacy_icons = self.legacy_data_dir / "item_icons"
+            if legacy_icons.exists():
+                self.item_icon_dir.mkdir(parents=True, exist_ok=True)
+                for source in legacy_icons.iterdir():
+                    if not source.is_file():
+                        continue
+                    target = self.item_icon_dir / source.name
+                    if not target.exists():
+                        shutil.copy2(source, target)
+        except Exception as exc:
+            logger.warning(f"[PointsShop] migrate legacy storage failed: {exc}")
+
+    def _stock_remaining(self, item: dict[str, Any]) -> int:
+        item_id = str(item.get("id") or "")
+        configured = int(item.get("stock", -1) if item.get("stock", -1) is not None else -1)
+        stock_map = self.state.setdefault("stock", {})
+        current = stock_map.get(item_id)
+        try:
+            current_value = int(current if current is not None else configured)
+        except Exception:
+            current_value = configured
+
+        if configured < 0:
+            if item_id not in stock_map or current_value != -1:
+                stock_map[item_id] = -1
+            return -1
+
+        if item_id not in stock_map or current_value < 0:
+            stock_map[item_id] = configured
+            return configured
+        return max(0, current_value)
+
     def _sync_stock_from_config(self) -> None:
+        if not self.state.get("items"):
+            self.state["items"] = self._default_items()
         stock_map = self.state.setdefault("stock", {})
         reward_pool = self._normalize_reward_pool_state(self.state.get("reward_pool"))
         self.state["reward_pool"] = reward_pool
@@ -821,15 +1099,26 @@ class PointsShopPlugin(Star):
             if not item_id:
                 continue
             configured = int(item.get("stock", -1) if item.get("stock", -1) is not None else -1)
-            if item_id not in stock_map:
+            current = stock_map.get(item_id)
+            try:
+                current_value = int(current if current is not None else configured)
+            except Exception:
+                current_value = configured
+            if configured >= 0 and item_id not in stock_map:
+                stock_map[item_id] = configured
+            elif configured >= 0 and current_value < 0:
                 stock_map[item_id] = configured
             elif configured < 0:
                 stock_map[item_id] = -1
             reward_pool.setdefault(item_id, [])
     def _items(self) -> list[dict[str, Any]]:
-        raw = self.config.get("items")
-        if not isinstance(raw, list):
-            raw = self._default_items()
+        raw = self.state.get("items")
+        if not isinstance(raw, list) or not raw:
+            config_items = self.config.get("items")
+            if isinstance(config_items, list) and config_items:
+                raw = config_items
+            else:
+                raw = self._default_items()
         items: list[dict[str, Any]] = []
         for index, item in enumerate(raw, start=1):
             if not isinstance(item, dict):
@@ -852,6 +1141,8 @@ class PointsShopPlugin(Star):
                     "description": str(item.get("description") or "").strip(),
                     "delivery": str(item.get("delivery") or "").strip(),
                     "emoji": str(item.get("emoji") or "🎁").strip()[:4],
+                    "icon_path": self._normalize_icon_path(item.get("icon_path") or item.get("icon_file") or ""),
+                    "icon_url": self._item_icon_url(item_id),
                     "color": str(item.get("color") or "").strip(),
                     "reward_mode": reward_mode,
                     "enabled": True,
@@ -867,6 +1158,7 @@ class PointsShopPlugin(Star):
                 "price": 60,
                 "stock": -1,
                 "emoji": "☕",
+                "icon_path": "",
                 "description": "给自己兑换一杯精神补给",
                 "delivery": "请联系管理员核销。",
                 "color": "#6f4e37",
@@ -879,6 +1171,7 @@ class PointsShopPlugin(Star):
                 "price": 180,
                 "stock": 5,
                 "emoji": "🏷",
+                "icon_path": "",
                 "description": "兑换一次群头衔/称号修改",
                 "delivery": "兑换后把想要的头衔发给管理员。",
                 "color": "#4f46e5",
@@ -891,6 +1184,7 @@ class PointsShopPlugin(Star):
                 "price": 300,
                 "stock": 3,
                 "emoji": "🎁",
+                "icon_path": "",
                 "description": "随机小奖励，开盒有惊喜",
                 "delivery": "奖励会通过私聊自动发放。",
                 "color": "#db2777",
@@ -898,6 +1192,51 @@ class PointsShopPlugin(Star):
                 "enabled": True,
             },
         ]
+
+    def _normalize_items_state(self, raw: Any) -> list[dict[str, Any]]:
+        source = raw if isinstance(raw, list) and raw else self.config.get("items")
+        if not isinstance(source, list) or not source:
+            source = self._default_items()
+
+        normalized: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for index, item in enumerate(source, start=1):
+            if not isinstance(item, dict):
+                continue
+            item_id = re.sub(r"[^a-zA-Z0-9_-]+", "", str(item.get("id") or index).strip())
+            if not item_id:
+                item_id = f"item{index}"
+            if item_id in seen_ids:
+                suffix = 2
+                candidate = f"{item_id}_{suffix}"
+                while candidate in seen_ids:
+                    suffix += 1
+                    candidate = f"{item_id}_{suffix}"
+                item_id = candidate
+            seen_ids.add(item_id)
+
+            name = str(item.get("name") or f"商品{index}").strip() or f"商品{index}"
+            price = max(1, int(item.get("price") or 1))
+            stock = int(item.get("stock", -1) if item.get("stock", -1) is not None else -1)
+            reward_mode = str(item.get("reward_mode") or "manual").strip().lower()
+            if reward_mode not in {"manual", "pool"}:
+                reward_mode = "manual"
+            normalized.append(
+                {
+                    "id": item_id,
+                    "name": name,
+                    "price": price,
+                    "stock": stock,
+                    "emoji": str(item.get("emoji") or "🎁").strip()[:4],
+                    "icon_path": self._normalize_icon_path(item.get("icon_path") or item.get("icon_file") or ""),
+                    "description": str(item.get("description") or "").strip(),
+                    "delivery": str(item.get("delivery") or "").strip(),
+                    "color": str(item.get("color") or "").strip(),
+                    "reward_mode": reward_mode,
+                    "enabled": self._to_bool(item.get("enabled", True), True),
+                }
+            )
+        return normalized
     def _find_item(self, key: str) -> dict[str, Any] | None:
         normalized = key.strip().lower()
         if not normalized:
@@ -910,16 +1249,15 @@ class PointsShopPlugin(Star):
 
     def _stock_left(self, item: dict[str, Any]) -> int:
         item_id = str(item.get("id") or "")
-        configured = int(item.get("stock", -1) if item.get("stock", -1) is not None else -1)
-        if configured < 0:
-            return -1
-        stock_map = self.state.setdefault("stock", {})
-        if item_id not in stock_map:
-            stock_map[item_id] = configured
-        try:
-            return int(stock_map.get(item_id, configured))
-        except Exception:
-            return configured
+        remaining = self._stock_remaining(item)
+
+        if self._reward_mode(item) == "pool":
+            pool_size = len(self._reward_pool(item_id))
+            if remaining < 0:
+                return pool_size
+            return max(0, min(remaining, pool_size))
+
+        return remaining
 
     def _balance(self, group_sid: str, user_id: str) -> int:
         return int(self.state.setdefault("balances", {}).setdefault(user_id, 0) or 0)
@@ -930,6 +1268,12 @@ class PointsShopPlugin(Star):
         next_value = max(0, current + int(delta))
         balances[user_id] = next_value
         return next_value
+
+    def _today(self) -> str:
+        return self._now().strftime("%Y-%m-%d")
+
+    def _now(self) -> datetime:
+        return datetime.now(CHINA_TZ)
 
     def _next_streak(self, group_sid: str, user_id: str, today: str) -> int:
         streaks = self.state.setdefault("streaks", {})
@@ -953,13 +1297,43 @@ class PointsShopPlugin(Star):
         return bonus if streak > 0 and streak % every == 0 else 0
 
     def _days_ago(self, days: int) -> str:
-        return datetime.fromtimestamp(time.time() - days * 86400).strftime("%Y-%m-%d")
+        return (self._now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    def _append_exchange_record(self, event: AstrMessageEvent, item: dict[str, Any], qty: int, cost: int) -> dict[str, Any]:
-        records = self.state.setdefault("exchange_records", [])
-        record = {
-            "order_id": datetime.now().strftime("%Y%m%d%H%M%S") + str(random.randint(100, 999)),
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    def _begin_message_action(self, event: AstrMessageEvent, action: str) -> bool:
+        key = self._message_action_key(event, action)
+        if not key:
+            return True
+        now_ts = self._now().timestamp()
+        self._cleanup_handled_message_keys(now_ts)
+        last_seen = self._handled_message_keys.get(key)
+        if last_seen is not None and now_ts - last_seen < 15:
+            logger.info(f"[PointsShop] duplicate message ignored: action={action}, key={key}")
+            return False
+        self._handled_message_keys[key] = now_ts
+        return True
+
+    def _cleanup_handled_message_keys(self, now_ts: float | None = None) -> None:
+        now_ts = now_ts if now_ts is not None else self._now().timestamp()
+        expired = [key for key, seen_at in self._handled_message_keys.items() if now_ts - seen_at > 300]
+        for key in expired:
+            self._handled_message_keys.pop(key, None)
+
+    def _message_action_key(self, event: AstrMessageEvent, action: str) -> str:
+        message_id = self._message_id(event)
+        if message_id:
+            return f"{action}:{event.get_platform_id()}:{message_id}"
+        text = self._normalized_text(event)
+        group_id = self._group_id(event)
+        user_id = self._sender_id(event)
+        if not text:
+            return ""
+        return f"{action}:{event.get_platform_id()}:{group_id}:{user_id}:{text}"
+
+    def _build_exchange_record(self, event: AstrMessageEvent, item: dict[str, Any], qty: int, cost: int) -> dict[str, Any]:
+        now = self._now()
+        return {
+            "order_id": now.strftime("%Y%m%d%H%M%S") + str(random.randint(100, 999)),
+            "time": now.strftime("%Y-%m-%d %H:%M:%S"),
             "platform_id": event.get_platform_id(),
             "group_sid": self._group_sid(event),
             "group_id": self._group_id(event),
@@ -970,14 +1344,22 @@ class PointsShopPlugin(Star):
             "qty": int(qty),
             "cost": int(cost),
         }
+    def _append_exchange_record(self, record: dict[str, Any]) -> None:
+        records = self.state.setdefault("exchange_records", [])
         records.append(record)
         self._trim_records("exchange_records", self._cfg_int("max_exchange_records", 500))
-        return record
+
+    def _remove_exchange_record(self, order_id: str) -> None:
+        if not order_id:
+            return
+        records = self.state.setdefault("exchange_records", [])
+        self.state["exchange_records"] = [entry for entry in records if str(entry.get("order_id") or "") != order_id]
 
     def _append_game_record(self, event: AstrMessageEvent, move: str, bot_move: str, bet: int, delta: int) -> None:
+        now = self._now()
         self.state.setdefault("game_records", []).append(
             {
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "time": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "platform_id": event.get_platform_id(),
                 "group_sid": self._group_sid(event),
                 "group_id": self._group_id(event),
@@ -1053,8 +1435,10 @@ class PointsShopPlugin(Star):
             self._rounded_rect(draw, (x1, y1, x2, y2), 24, fill="#f8fafc", outline="#ffffff")
             draw.rounded_rectangle((x1, y1, x1 + 16, y2), radius=8, fill=base_color)
             self._rounded_rect(draw, (x1 + 36, y1 + 34, x1 + 126, y1 + 124), 28, fill=base_color, outline=None)
-            emoji = str(item.get("emoji") or "礼")
-            self._draw_centered_text(draw, emoji, (x1 + 36, y1 + 34, x1 + 126, y1 + 124), icon_font, "#ffffff")
+            icon_box = (x1 + 36, y1 + 34, x1 + 126, y1 + 124)
+            if not self._draw_item_icon(img, item, icon_box, icon_font, base_color):
+                emoji = str(item.get("emoji") or "礼")
+                self._draw_centered_text(draw, emoji, icon_box, icon_font, "#ffffff")
 
             name = str(item.get("name") or "")
             desc = str(item.get("description") or "暂无说明")
@@ -1083,7 +1467,7 @@ class PointsShopPlugin(Star):
         )
         draw.text(
             (width - 365, footer_y),
-            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            self._now().strftime("%Y-%m-%d %H:%M"),
             fill="#cbd5e1",
             font=small_font,
         )
@@ -1118,6 +1502,28 @@ class PointsShopPlugin(Star):
         x = box[0] + (box[2] - box[0] - tw) / 2
         y = box[1] + (box[3] - box[1] - th) / 2 - 3
         draw.text((x, y), text, fill=fill, font=font)
+
+    def _draw_item_icon(self, img: Any, item: dict[str, Any], box: tuple[int, int, int, int], font: Any, base_color: str) -> bool:
+        if Image is None or ImageOps is None:
+            return False
+        icon_path = self._item_icon_path(item)
+        if icon_path is None or not icon_path.exists():
+            return False
+        try:
+            with Image.open(icon_path) as source:
+                fitted = ImageOps.fit(source.convert("RGBA"), (box[2] - box[0], box[3] - box[1]), method=Image.Resampling.LANCZOS)
+                mask = Image.new("L", fitted.size, 0)
+                mask_draw = ImageDraw.Draw(mask)
+                radius = max(18, min(fitted.size) // 4)
+                mask_draw.rounded_rectangle((0, 0, fitted.size[0], fitted.size[1]), radius=radius, fill=255)
+                fitted.putalpha(mask)
+                background = Image.new("RGBA", fitted.size, self._hex_to_rgb(base_color) + (255,))
+                background.alpha_composite(fitted)
+                img.paste(background.convert("RGB"), (box[0], box[1]))
+            return True
+        except Exception as exc:
+            logger.warning(f"[PointsShop] draw item icon failed: {icon_path} ({exc})")
+            return False
 
     def _font(self, size: int, bold: bool = False) -> Any:
         candidates = [
@@ -1164,8 +1570,9 @@ class PointsShopPlugin(Star):
             item_id = str(item.get("id") or "")
             stock = stocks.get(item_id, item.get("stock", -1))
             stock_text = "无限" if int(stock) < 0 else str(int(stock))
+            icon_label = "[图]" if self._item_icon_path(item) else str(item.get("emoji", "🎁"))
             lines.append(
-                f"{item.get('emoji', '🎁')} {item.get('name')} [{item_id}]\n"
+                f"{icon_label} {item.get('name')} [{item_id}]\n"
                 f"价格：{item.get('price')} | 库存：{stock_text}\n"
                 f"{item.get('description', '')}"
             )
@@ -1247,7 +1654,7 @@ class PointsShopPlugin(Star):
             "id": str(reward_id or self._new_reward_entry_id()).strip(),
             "code": normalized_code,
             "note": normalized_note,
-            "created_at": str(created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")).strip(),
+            "created_at": str(created_at or self._now().strftime("%Y-%m-%d %H:%M:%S")).strip(),
         }
 
     def _normalize_reward_entry(self, raw_entry: Any) -> dict[str, Any] | None:
@@ -1291,6 +1698,128 @@ class PointsShopPlugin(Star):
                         entries.append(entry)
             normalized[item_id] = entries
         return normalized
+
+    def _normalize_icon_path(self, raw: Any) -> str:
+        value = str(raw or "").strip().replace("\\", "/")
+        if not value:
+            return ""
+
+        candidate = Path(value)
+        if candidate.is_absolute():
+            path = candidate.resolve(strict=False)
+        else:
+            lowered = value.lower()
+            if lowered.startswith("data/item_icons/"):
+                path = (self.data_dir / value[len("data/") :]).resolve(strict=False)
+            elif lowered.startswith("item_icons/"):
+                path = (self.data_dir / value).resolve(strict=False)
+            else:
+                plugin_candidate = (self.plugin_dir / value).resolve(strict=False)
+                legacy_icons_root = (self.legacy_data_dir / "item_icons").resolve(strict=False)
+                try:
+                    relative_legacy = plugin_candidate.relative_to(legacy_icons_root)
+                except ValueError:
+                    path = (self.data_dir / value).resolve(strict=False)
+                else:
+                    path = (self.item_icon_dir / relative_legacy).resolve(strict=False)
+
+        try:
+            path.relative_to(self.data_dir.resolve(strict=False))
+        except ValueError:
+            return ""
+        return str(path.relative_to(self.data_dir)).replace("\\", "/")
+
+    def _item_icon_path(self, item: dict[str, Any]) -> Path | None:
+        icon_path = self._normalize_icon_path(item.get("icon_path") or "")
+        if not icon_path:
+            return None
+        resolved = (self.data_dir / icon_path).resolve(strict=False)
+        try:
+            resolved.relative_to(self.data_dir.resolve(strict=False))
+        except ValueError:
+            return None
+        return resolved
+
+    def _item_icon_url(self, item_id: str, icon_path: str = "") -> str:
+        normalized = self._normalize_icon_path(icon_path)
+        if not normalized:
+            return ""
+        resolved = (self.data_dir / normalized).resolve(strict=False)
+        if not resolved.exists():
+            return ""
+        encoded_id = quote(str(item_id), safe="")
+        return f"/api/plug/{PLUGIN_NAME}/points-shop/admin/items/icon/get?item_id={encoded_id}"
+
+    def _set_item_icon_path(self, item_id: str, icon_path: str) -> None:
+        items = self.state.setdefault("items", [])
+        normalized = self._normalize_icon_path(icon_path)
+        for item in items:
+            if str(item.get("id") or "") == str(item_id):
+                item["icon_path"] = normalized
+                break
+
+    def _delete_item_icon_file(self, item_id: str) -> None:
+        for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+            path = self.item_icon_dir / f"{item_id}{ext}"
+            try:
+                if path.exists():
+                    path.unlink()
+            except Exception as exc:
+                logger.warning(f"[PointsShop] delete icon failed: {path} ({exc})")
+
+    def _rename_item_icon_file(self, old_item_id: str, new_item_id: str) -> str | None:
+        if not old_item_id or not new_item_id or old_item_id == new_item_id:
+            return None
+        for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+            old_path = self.item_icon_dir / f"{old_item_id}{ext}"
+            if not old_path.exists():
+                continue
+            new_path = self.item_icon_dir / f"{new_item_id}{ext}"
+            try:
+                self._delete_item_icon_file(new_item_id)
+                old_path.replace(new_path)
+                return str(new_path.relative_to(self.data_dir)).replace("\\", "/")
+            except Exception as exc:
+                logger.warning(f"[PointsShop] rename icon failed: {old_path} -> {new_path} ({exc})")
+                return None
+        return None
+
+    async def _save_uploaded_icon_file(self, safe_item_id: str, body: dict[str, Any]) -> Path | None:
+        allowed_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        files = await request.files
+        file = next(iter(files.values()), None) if files else None
+
+        if file is not None and str(getattr(file, "filename", "") or "").strip():
+            ext = Path(str(file.filename)).suffix.lower()
+            if ext not in allowed_exts:
+                raise ValueError("仅支持 png、jpg、jpeg、webp、gif 图片。")
+            self._delete_item_icon_file(safe_item_id)
+            self.item_icon_dir.mkdir(parents=True, exist_ok=True)
+            save_path = self.item_icon_dir / f"{safe_item_id}{ext}"
+            await file.save(str(save_path))
+            return save_path
+
+        file_name = str(body.get("file_name") or "").strip()
+        file_data = str(body.get("file_data") or "").strip()
+        if not file_name or not file_data:
+            return None
+
+        ext = Path(file_name).suffix.lower()
+        if ext not in allowed_exts:
+            raise ValueError("仅支持 png、jpg、jpeg、webp、gif 图片。")
+
+        if "," in file_data and file_data.startswith("data:"):
+            _, file_data = file_data.split(",", 1)
+        try:
+            content = base64.b64decode(file_data, validate=True)
+        except Exception as exc:
+            raise ValueError("上传图片数据损坏，无法解析。") from exc
+
+        self._delete_item_icon_file(safe_item_id)
+        self.item_icon_dir.mkdir(parents=True, exist_ok=True)
+        save_path = self.item_icon_dir / f"{safe_item_id}{ext}"
+        save_path.write_bytes(content)
+        return save_path
 
     def _format_reward_entry(self, entry: dict[str, Any]) -> str:
         code = str(entry.get("code") or "").strip()
@@ -1380,7 +1909,7 @@ class PointsShopPlugin(Star):
         user_id = self._sender_id(event)
         self.state.setdefault("profiles", {})[user_id] = {
             "name": self._sender_name(event),
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": self._now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     async def _reply_and_stop(self, event: AstrMessageEvent, text: str) -> None:
@@ -1506,6 +2035,22 @@ class PointsShopPlugin(Star):
         except Exception:
             return ""
 
+    def _message_id(self, event: AstrMessageEvent) -> str:
+        candidates: list[Any] = []
+        message_obj = getattr(event, "message_obj", None)
+        if message_obj is not None:
+            for key in ("message_id", "id", "message_seq", "real_id"):
+                candidates.append(getattr(message_obj, key, ""))
+        raw_message = getattr(event, "raw_message", None)
+        if isinstance(raw_message, dict):
+            for key in ("message_id", "id", "message_seq", "real_id"):
+                candidates.append(raw_message.get(key))
+        for value in candidates:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
     def _sender_id(self, event: AstrMessageEvent) -> str:
         try:
             return str(event.get_sender_id())
@@ -1536,10 +2081,20 @@ class PointsShopPlugin(Star):
             return False
 
     def _resolve_path(self, raw: str) -> Path:
-        path = Path(str(raw or "").strip() or "data/state.json")
+        text = str(raw or "").strip()
+        if not text:
+            return self.data_dir
+
+        path = Path(text)
         if path.is_absolute():
             return path
-        return self.plugin_dir / path
+
+        normalized = text.replace("\\", "/").lstrip("/")
+        if normalized.startswith("data/"):
+            return self.data_dir / normalized[len("data/") :]
+        if normalized.startswith("item_icons/"):
+            return self.data_dir / normalized
+        return self.data_dir / normalized
 
     def _enabled(self) -> bool:
         return self._cfg_bool("enabled", True)
@@ -1561,6 +2116,13 @@ class PointsShopPlugin(Star):
 
     def _cfg_str(self, key: str, default: str = "") -> str:
         return str(self.config.get(key, default) if self.config.get(key, None) is not None else default)
+
+    def _cfg_path_str(self, key: str, default: str = "") -> str:
+        value = self.config.get(key, None)
+        if value is None:
+            return str(default)
+        text = str(value).strip()
+        return text or str(default)
 
     def _cfg_int(self, key: str, default: int = 0) -> int:
         try:
