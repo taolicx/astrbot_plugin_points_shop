@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.12"
+PLUGIN_VERSION = "0.1.13"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -321,7 +321,7 @@ class PointsShopPlugin(Star):
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
             self._remember_user(event)
-            item = self._find_item(item_key)
+            item = self._find_item(item_key, include_disabled=True)
             if not item:
                 await self._reply_and_stop(event, "没有找到这个商品。发送 商店 查看商品 ID 和名称。")
                 return
@@ -485,7 +485,7 @@ class PointsShopPlugin(Star):
             return
 
         async with self._lock:
-            item = self._find_item(item_key)
+            item = self._find_item(item_key, include_disabled=True)
             if not item:
                 await self._reply_and_stop(event, "没有找到这个商品。")
                 return
@@ -514,7 +514,7 @@ class PointsShopPlugin(Star):
         item_key = str(payload or "").strip()
         async with self._lock:
             if item_key:
-                item = self._find_item(item_key)
+                item = self._find_item(item_key, include_disabled=True)
                 if not item:
                     await self._reply_and_stop(event, "没有找到这个商品。")
                     return
@@ -532,7 +532,7 @@ class PointsShopPlugin(Star):
                 return
 
             lines = ["当前各商品兑换码仓库："]
-            for item in self._items():
+            for item in self._items(include_disabled=True):
                 item_id = str(item.get("id") or "")
                 mode_label = "兑换码私发" if self._reward_mode(item) == "pool" else "手动核销"
                 lines.append(f"{item.get('name')} [{item_id}] - {len(self._reward_pool(item_id))} 条 - 模式：{mode_label}")
@@ -540,7 +540,7 @@ class PointsShopPlugin(Star):
 
     async def api_admin_items(self):
         async with self._lock:
-            items = [self._serialize_admin_item(item) for item in self._items()]
+            items = [self._serialize_admin_item(item) for item in self._items(include_disabled=True)]
         return self._api_ok({"items": items})
 
     async def api_admin_items_save(self):
@@ -621,7 +621,7 @@ class PointsShopPlugin(Star):
 
             self.state["items"] = self._normalize_items_state(items)
             self._save_state()
-            item = self._find_item(item_id)
+            item = self._find_item(item_id, include_disabled=True)
             data = {"item": self._serialize_admin_item(item)} if item else {}
         return self._api_ok(data, "商品已保存。")
 
@@ -661,7 +661,7 @@ class PointsShopPlugin(Star):
         if not safe_item_id:
             return self._api_error("商品 ID 不合法。")
         async with self._lock:
-            item = self._find_item(item_id)
+            item = self._find_item(item_id, include_disabled=True)
             if not item:
                 return self._api_error("没有找到这个商品。", 404)
 
@@ -674,7 +674,7 @@ class PointsShopPlugin(Star):
 
             self._set_item_icon_path(item_id, str(save_path.relative_to(self.data_dir)).replace("\\", "/"))
             self._save_state()
-            item = self._find_item(item_id)
+            item = self._find_item(item_id, include_disabled=True)
             data = {"item": self._serialize_admin_item(item)} if item else {}
         return self._api_ok(data, "商品图标已上传。")
 
@@ -685,13 +685,13 @@ class PointsShopPlugin(Star):
             return self._api_error("缺少商品 ID。")
 
         async with self._lock:
-            item = self._find_item(item_id)
+            item = self._find_item(item_id, include_disabled=True)
             if not item:
                 return self._api_error("没有找到这个商品。", 404)
             self._delete_item_icon_file(item_id)
             self._set_item_icon_path(item_id, "")
             self._save_state()
-            item = self._find_item(item_id)
+            item = self._find_item(item_id, include_disabled=True)
             data = {"item": self._serialize_admin_item(item)} if item else {}
         return self._api_ok(data, "商品图标已删除。")
 
@@ -700,7 +700,7 @@ class PointsShopPlugin(Star):
         if not item_id:
             return self._api_error("缺少 item_id 参数。")
 
-        item = self._find_item(item_id)
+        item = self._find_item(item_id, include_disabled=True)
         if not item:
             return self._api_error("没有找到这个商品。", 404)
 
@@ -711,6 +711,129 @@ class PointsShopPlugin(Star):
         mime_type, _ = mimetypes.guess_type(str(icon_path))
         return await send_file(icon_path, mimetype=mime_type or "application/octet-stream")
 
+    async def api_admin_poster_get(self):
+        async with self._lock:
+            data = self._serialize_poster_settings()
+        return self._api_ok(data)
+
+    async def api_admin_poster_save(self):
+        body = await self._request_json()
+        title = str(body.get("title") or "").strip()
+        subtitle = str(body.get("subtitle") or "").strip()
+        async with self._lock:
+            poster = self._poster_state()
+            poster["title"] = title
+            poster["subtitle"] = subtitle
+            poster["updated_at"] = self._now().strftime("%Y-%m-%d %H:%M:%S")
+            self._save_state()
+            data = self._serialize_poster_settings()
+        return self._api_ok(data, "海报设置已保存。")
+
+    async def api_admin_poster_background_upload(self):
+        body: dict[str, Any] = {}
+        try:
+            if str(getattr(request, "mimetype", "") or "").lower().startswith("application/json"):
+                body = await self._request_json()
+        except Exception:
+            body = {}
+        async with self._lock:
+            try:
+                save_path = await self._save_uploaded_poster_background(body)
+            except ValueError as exc:
+                return self._api_error(str(exc))
+            if save_path is None:
+                return self._api_error("没有收到上传文件。")
+            poster = self._poster_state()
+            poster["background_path"] = str(save_path.relative_to(self.data_dir)).replace("\\", "/")
+            poster["updated_at"] = self._now().strftime("%Y-%m-%d %H:%M:%S")
+            self._save_state()
+            data = self._serialize_poster_settings()
+        return self._api_ok(data, "海报背景已上传。")
+
+    async def api_admin_poster_background_delete(self):
+        async with self._lock:
+            poster = self._poster_state()
+            self._delete_poster_background_file()
+            poster["background_path"] = ""
+            poster["updated_at"] = self._now().strftime("%Y-%m-%d %H:%M:%S")
+            self._save_state()
+            data = self._serialize_poster_settings()
+        return self._api_ok(data, "海报背景已删除。")
+
+    async def api_admin_poster_background_get(self):
+        background_path = self._poster_background_path()
+        if background_path is None or not background_path.exists():
+            return self._api_error("当前没有自定义海报背景。", 404)
+        mime_type, _ = mimetypes.guess_type(str(background_path))
+        return await send_file(background_path, mimetype=mime_type or "application/octet-stream")
+
+    async def api_admin_poster_preview(self):
+        async with self._lock:
+            items = [item for item in self._items() if self._to_bool(item.get("enabled", True), True)]
+            stocks = {str(item.get("id") or ""): self._stock_left(item) for item in items}
+            self._render_shop_poster(items, stocks, 8888, "海报预览")
+            preview_path = self.poster_path
+        if not preview_path.exists():
+            return self._api_error("海报预览生成失败。", 500)
+        return await send_file(preview_path, mimetype="image/png")
+
+    async def api_admin_balances(self):
+        keyword = str(request.args.get("keyword", "") or "").strip().lower()
+        limit_raw = str(request.args.get("limit", "") or "").strip()
+        try:
+            limit = int(limit_raw) if limit_raw else 120
+        except Exception:
+            limit = 120
+        limit = max(1, min(limit, 500))
+        async with self._lock:
+            balances = self.state.setdefault("balances", {})
+            rows = [self._serialize_balance_entry(str(user_id)) for user_id in balances.keys()]
+            rows.sort(key=lambda entry: (int(entry.get("balance") or 0), str(entry.get("updated_at") or "")), reverse=True)
+            if keyword:
+                rows = [
+                    entry
+                    for entry in rows
+                    if keyword in str(entry.get("user_id") or "").lower() or keyword in str(entry.get("display_name") or "").lower()
+                ]
+            rows = rows[:limit]
+            data = {
+                "items": rows,
+                "total": len(rows),
+                "summary": {
+                    "users": len(balances),
+                    "points": sum(max(0, int(value or 0)) for value in balances.values()),
+                },
+            }
+        return self._api_ok(data)
+
+    async def api_admin_balances_update(self):
+        body = await self._request_json()
+        user_id = str(body.get("user_id") or "").strip()
+        mode = str(body.get("mode") or "set").strip().lower()
+        try:
+            value = int(body.get("value"))
+        except Exception:
+            return self._api_error("积分值格式不正确。")
+        if not user_id:
+            return self._api_error("缺少用户 ID。")
+        if mode not in {"set", "delta"}:
+            return self._api_error("mode 只支持 set 或 delta。")
+        async with self._lock:
+            if mode == "set":
+                next_value = max(0, value)
+                self.state.setdefault("balances", {})[user_id] = next_value
+            else:
+                next_value = self._add_points("", user_id, value)
+            profiles = self.state.setdefault("profiles", {})
+            profile = profiles.setdefault(user_id, {"name": user_id, "updated_at": ""})
+            if str(body.get("name") or "").strip():
+                profile["name"] = str(body.get("name") or "").strip()
+            profile["updated_at"] = self._now().strftime("%Y-%m-%d %H:%M:%S")
+            self._save_state()
+            data = {"entry": self._serialize_balance_entry(user_id)}
+        action_text = "积分已覆盖" if mode == "set" else "积分已调整"
+        return self._api_ok(data, f"{action_text}，当前积分：{next_value}")
+
     async def api_admin_codes(self):
         item_key = str(request.args.get("item_id", "") or "").strip()
         keyword = str(request.args.get("keyword", "") or "").strip().lower()
@@ -718,7 +841,7 @@ class PointsShopPlugin(Star):
             return self._api_error("缺少 item_id 参数。")
 
         async with self._lock:
-            item = self._find_item(item_key)
+            item = self._find_item(item_key, include_disabled=True)
             if not item:
                 return self._api_error("没有找到这个商品。", 404)
             if self._reward_mode(item) != "pool":
@@ -767,7 +890,7 @@ class PointsShopPlugin(Star):
             return self._api_error("没有可用的兑换码内容。")
 
         async with self._lock:
-            item = self._find_item(item_key)
+            item = self._find_item(item_key, include_disabled=True)
             if not item:
                 return self._api_error("没有找到这个商品。", 404)
             if self._reward_mode(item) != "pool":
@@ -807,7 +930,7 @@ class PointsShopPlugin(Star):
             return self._api_error("缺少 item_id 或 reward_id。")
 
         async with self._lock:
-            item = self._find_item(item_key)
+            item = self._find_item(item_key, include_disabled=True)
             if not item:
                 return self._api_error("没有找到这个商品。", 404)
             if self._reward_mode(item) != "pool":
@@ -834,7 +957,7 @@ class PointsShopPlugin(Star):
             return self._api_error("缺少 item_id。")
 
         async with self._lock:
-            item = self._find_item(item_key)
+            item = self._find_item(item_key, include_disabled=True)
             if not item:
                 return self._api_error("没有找到这个商品。", 404)
             if self._reward_mode(item) != "pool":
@@ -859,6 +982,14 @@ class PointsShopPlugin(Star):
             ("items/icon/upload", self.api_admin_item_icon_upload, ["POST"], "积分商城商品管理：上传商品图标"),
             ("items/icon/delete", self.api_admin_item_icon_delete, ["POST"], "积分商城商品管理：删除商品图标"),
             ("items/icon/get", self.api_admin_item_icon_get, ["GET"], "积分商城商品管理：读取商品图标"),
+            ("poster", self.api_admin_poster_get, ["GET"], "积分商城海报管理：读取海报设置"),
+            ("poster/save", self.api_admin_poster_save, ["POST"], "积分商城海报管理：保存海报设置"),
+            ("poster/background/upload", self.api_admin_poster_background_upload, ["POST"], "积分商城海报管理：上传海报背景"),
+            ("poster/background/delete", self.api_admin_poster_background_delete, ["POST"], "积分商城海报管理：删除海报背景"),
+            ("poster/background/get", self.api_admin_poster_background_get, ["GET"], "积分商城海报管理：读取海报背景"),
+            ("poster/preview", self.api_admin_poster_preview, ["GET"], "积分商城海报管理：生成海报预览"),
+            ("balances", self.api_admin_balances, ["GET"], "积分商城积分管理：读取积分列表"),
+            ("balances/update", self.api_admin_balances_update, ["POST"], "积分商城积分管理：调整积分"),
             ("codes", self.api_admin_codes, ["GET"], "积分商城兑换码管理：查询兑换码"),
             ("codes/bulk-add", self.api_admin_codes_bulk_add, ["POST"], "积分商城兑换码管理：批量添加兑换码"),
             ("codes/delete", self.api_admin_codes_delete, ["POST"], "积分商城兑换码管理：删除兑换码"),
@@ -919,6 +1050,41 @@ class PointsShopPlugin(Star):
             "is_pool": mode == "pool",
         }
 
+    def _serialize_balance_entry(self, user_id: str) -> dict[str, Any]:
+        key = str(user_id or "").strip()
+        profiles = self.state.setdefault("profiles", {})
+        profile = profiles.get(key, {}) if isinstance(profiles, dict) else {}
+        name = str(profile.get("name") or "").strip()
+        updated_at = str(profile.get("updated_at") or "").strip()
+        streak = self.state.setdefault("streaks", {}).get(key, {})
+        return {
+            "user_id": key,
+            "name": name,
+            "display_name": name or key,
+            "balance": self._balance("", key),
+            "updated_at": updated_at,
+            "last_signin": str(self.state.setdefault("signins", {}).get(key) or ""),
+            "streak_days": int(streak.get("days") or 0) if isinstance(streak, dict) else 0,
+        }
+
+    def _serialize_poster_settings(self) -> dict[str, Any]:
+        poster = self._poster_state()
+        custom_title = str(poster.get("title") or "").strip()
+        custom_subtitle = str(poster.get("subtitle") or "").strip()
+        background_path = self._normalize_icon_path(poster.get("background_path") or "")
+        return {
+            "title": custom_title or self._cfg_str("poster_title", "积分兑换商城"),
+            "subtitle": custom_subtitle or self._cfg_str("poster_subtitle", "签到积累，猜拳翻倍，把喜欢的奖励带回家"),
+            "custom_title": custom_title,
+            "custom_subtitle": custom_subtitle,
+            "background_path": background_path,
+            "background_url": self._poster_background_url(background_path),
+            "preview_url": self._poster_preview_url(),
+            "has_background": bool(background_path),
+            "render_width": max(1320, self._cfg_int("poster_width", 1440)),
+            "updated_at": str(poster.get("updated_at") or ""),
+        }
+
     def _serialize_reward_entry(self, entry: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": str(entry.get("id") or ""),
@@ -935,6 +1101,7 @@ class PointsShopPlugin(Star):
             "streaks": {},
             "stock": {},
             "items": [],
+            "poster": {},
             "reward_pool": {},
             "exchange_records": [],
             "game_records": [],
@@ -958,6 +1125,7 @@ class PointsShopPlugin(Star):
         self.state["streaks"] = self._merge_streak_state(self.state.get("streaks"))
         self.state["profiles"] = self._merge_profile_state(self.state.get("profiles"))
         self.state["items"] = self._normalize_items_state(self.state.get("items"))
+        self.state["poster"] = self._normalize_poster_state(self.state.get("poster"))
         self.state["reward_pool"] = self._normalize_reward_pool_state(self.state.get("reward_pool"))
 
     def _merge_balance_state(self, raw: Any) -> dict[str, int]:
@@ -1035,6 +1203,16 @@ class PointsShopPlugin(Star):
         current = merged.get(user_id)
         if current is None or candidate["updated_at"] >= str(current.get("updated_at") or ""):
             merged[user_id] = candidate
+
+    def _normalize_poster_state(self, raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            return {"title": "", "subtitle": "", "background_path": "", "updated_at": ""}
+        return {
+            "title": str(raw.get("title") or "").strip(),
+            "subtitle": str(raw.get("subtitle") or "").strip(),
+            "background_path": self._normalize_icon_path(raw.get("background_path") or raw.get("bg_path") or ""),
+            "updated_at": str(raw.get("updated_at") or "").strip(),
+        }
     def _save_state(self) -> None:
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1111,7 +1289,7 @@ class PointsShopPlugin(Star):
             elif configured < 0:
                 stock_map[item_id] = -1
             reward_pool.setdefault(item_id, [])
-    def _items(self) -> list[dict[str, Any]]:
+    def _items(self, include_disabled: bool = False) -> list[dict[str, Any]]:
         raw = self.state.get("items")
         if not isinstance(raw, list) or not raw:
             config_items = self.config.get("items")
@@ -1130,7 +1308,9 @@ class PointsShopPlugin(Star):
             reward_mode = str(item.get("reward_mode") or "manual").strip().lower()
             if reward_mode not in {"manual", "pool"}:
                 reward_mode = "manual"
-            if not item_id or not name or not enabled:
+            if not item_id or not name:
+                continue
+            if not include_disabled and not enabled:
                 continue
             items.append(
                 {
@@ -1145,7 +1325,7 @@ class PointsShopPlugin(Star):
                     "icon_url": self._item_icon_url(item_id),
                     "color": str(item.get("color") or "").strip(),
                     "reward_mode": reward_mode,
-                    "enabled": True,
+                    "enabled": enabled,
                 }
             )
         return items
@@ -1237,11 +1417,11 @@ class PointsShopPlugin(Star):
                 }
             )
         return normalized
-    def _find_item(self, key: str) -> dict[str, Any] | None:
+    def _find_item(self, key: str, include_disabled: bool = False) -> dict[str, Any] | None:
         normalized = key.strip().lower()
         if not normalized:
             return None
-        for item in self._items():
+        for item in self._items(include_disabled=include_disabled):
             names = {str(item.get("id") or "").lower(), str(item.get("name") or "").lower()}
             if normalized in names:
                 return item
@@ -1389,91 +1569,89 @@ class PointsShopPlugin(Star):
         if Image is None or ImageDraw is None or ImageFont is None:
             raise RuntimeError("Pillow is not installed")
 
-        width = max(900, self._cfg_int("poster_width", 1080))
-        card_h = 170
-        header_h = 240
-        footer_h = 120
-        gap = 26
-        height = header_h + footer_h + len(items) * card_h + max(0, len(items) - 1) * gap + 72
-        height = max(height, 980)
+        width = max(1320, self._cfg_int("poster_width", 1440))
+        card_h = 204
+        header_h = 312
+        footer_h = 126
+        gap = 28
+        margin = 72
+        height = header_h + footer_h + len(items) * card_h + max(0, len(items) - 1) * gap + 96
+        height = max(height, 1180)
 
-        img = Image.new("RGB", (width, height), "#172033")
+        img = Image.new("RGBA", (width, height), (17, 24, 39, 255))
+        self._compose_poster_background(img)
         draw = ImageDraw.Draw(img)
-        self._draw_vertical_gradient(draw, width, height, "#172033", "#25384e")
-        self._draw_soft_circles(img)
 
-        title_font = self._font(70, bold=True)
-        sub_font = self._font(30)
+        title_font = self._font(78, bold=True)
+        sub_font = self._font(32)
         small_font = self._font(24)
-        item_font = self._font(38, bold=True)
+        meta_font = self._font(26)
+        item_font = self._font(42, bold=True)
         price_font = self._font(36, bold=True)
-        desc_font = self._font(25)
-        icon_font = self._font(58, bold=True)
+        desc_font = self._font(28)
+        icon_font = self._font(60, bold=True)
 
-        margin = 58
-        title = str(self._cfg_str("poster_title", "积分兑换商城"))
-        subtitle = str(self._cfg_str("poster_subtitle", "签到积累，猜拳翻倍，把喜欢的奖励带回家"))
-        draw.text((margin, 56), title, fill="#f8fafc", font=title_font)
-        draw.text((margin + 4, 145), subtitle, fill="#cbd5e1", font=sub_font)
-        self._rounded_rect(draw, (width - 330, 72, width - 58, 165), 28, fill="#f8fafc", outline=None)
-        draw.text((width - 302, 91), "当前积分", fill="#475569", font=small_font)
-        draw.text((width - 302, 121), str(balance), fill="#0f172a", font=price_font)
+        header_box = (margin, 50, width - margin, 248)
+        self._rounded_rect(draw, header_box, 30, fill=(247, 250, 252, 238), outline=(255, 255, 255, 72))
+
+        title, subtitle = self._poster_texts()
+        draw.text((margin + 34, 88), title, fill="#0f172a", font=title_font)
+        draw.text((margin + 38, 170), self._ellipsize(subtitle, sub_font, width - 520), fill="#475569", font=sub_font)
+
+        balance_box = (width - margin - 292, 86, width - margin - 28, 202)
+        self._rounded_rect(draw, balance_box, 24, fill=(15, 23, 42, 255), outline=None)
+        draw.text((balance_box[0] + 24, balance_box[1] + 20), "当前积分", fill="#cbd5e1", font=small_font)
+        draw.text((balance_box[0] + 24, balance_box[1] + 54), str(balance), fill="#f8fafc", font=price_font)
 
         y = header_h
-        palette = ["#38bdf8", "#f97316", "#a78bfa", "#34d399", "#fb7185", "#facc15"]
+        palette = ["#2563eb", "#dc2626", "#7c3aed", "#0f766e", "#ea580c", "#d946ef"]
         for idx, item in enumerate(items):
             x1, y1 = margin, y
             x2, y2 = width - margin, y + card_h
             base_color = self._safe_color(str(item.get("color") or ""), palette[idx % len(palette)])
-            shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
             sdraw = ImageDraw.Draw(shadow)
-            self._rounded_rect(sdraw, (x1 + 8, y1 + 10, x2 + 8, y2 + 10), 24, fill=(0, 0, 0, 80), outline=None)
-            shadow = shadow.filter(ImageFilter.GaussianBlur(14))
-            img.paste(Image.alpha_composite(img.convert("RGBA"), shadow).convert("RGB"))
+            self._rounded_rect(sdraw, (x1 + 6, y1 + 10, x2 + 6, y2 + 10), 22, fill=(15, 23, 42, 44), outline=None)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(12))
+            img.alpha_composite(shadow)
             draw = ImageDraw.Draw(img)
 
-            self._rounded_rect(draw, (x1, y1, x2, y2), 24, fill="#f8fafc", outline="#ffffff")
-            draw.rounded_rectangle((x1, y1, x1 + 16, y2), radius=8, fill=base_color)
-            self._rounded_rect(draw, (x1 + 36, y1 + 34, x1 + 126, y1 + 124), 28, fill=base_color, outline=None)
-            icon_box = (x1 + 36, y1 + 34, x1 + 126, y1 + 124)
+            self._rounded_rect(draw, (x1, y1, x2, y2), 22, fill=(255, 255, 255, 246), outline=(226, 232, 240, 255))
+            draw.rectangle((x1, y1, x1 + 12, y2), fill=base_color)
+
+            icon_box = (x1 + 34, y1 + 34, x1 + 162, y1 + 162)
+            self._rounded_rect(draw, icon_box, 12, fill=(241, 245, 249, 255), outline=(226, 232, 240, 255))
             if not self._draw_item_icon(img, item, icon_box, icon_font, base_color):
-                emoji = str(item.get("emoji") or "礼")
-                self._draw_centered_text(draw, emoji, icon_box, icon_font, "#ffffff")
+                emoji = str(item.get("emoji") or "🎁")
+                self._draw_centered_text(draw, emoji, icon_box, icon_font, base_color)
 
             name = str(item.get("name") or "")
             desc = str(item.get("description") or "暂无说明")
             item_id = str(item.get("id") or "")
-            draw.text((x1 + 154, y1 + 32), name, fill="#0f172a", font=item_font)
-            draw.text((x1 + 156, y1 + 85), self._ellipsize(desc, desc_font, width - 470), fill="#64748b", font=desc_font)
-            draw.text((x1 + 156, y1 + 124), f"ID: {item_id}", fill="#94a3b8", font=small_font)
+            draw.text((x1 + 194, y1 + 30), self._ellipsize(name, item_font, width - 610), fill="#0f172a", font=item_font)
+            draw.text((x1 + 194, y1 + 92), self._ellipsize(desc, desc_font, width - 610), fill="#475569", font=desc_font)
+            draw.text((x1 + 194, y1 + 146), f"商品 ID：{item_id}", fill="#64748b", font=small_font)
 
-            price_box = (x2 - 245, y1 + 38, x2 - 44, y1 + 103)
-            self._rounded_rect(draw, price_box, 22, fill="#0f172a", outline=None)
+            price_box = (x2 - 252, y1 + 34, x2 - 38, y1 + 98)
+            self._rounded_rect(draw, price_box, 18, fill=(15, 23, 42, 255), outline=None)
             self._draw_centered_text(draw, f"{int(item.get('price') or 0)} 积分", price_box, price_font, "#f8fafc")
+
             stock = stocks.get(item_id, item.get("stock", -1))
             stock_text = "库存：无限" if int(stock) < 0 else f"库存：{int(stock)}"
-            draw.text((x2 - 226, y1 + 118), stock_text, fill="#64748b", font=small_font)
+            mode_text = "发货：兑换码私发" if self._reward_mode(item) == "pool" else "发货：手动核销"
+            draw.text((x2 - 250, y1 + 118), stock_text, fill="#475569", font=meta_font)
+            draw.text((x2 - 250, y1 + 154), mode_text, fill="#64748b", font=small_font)
             y += card_h + gap
 
-        footer_y = height - footer_h + 10
-        draw.line((margin, footer_y - 16, width - margin, footer_y - 16), fill="#94a3b8", width=1)
-        user_part = self._ellipsize(user_name, small_font, 260)
+        footer_y = height - footer_h + 18
+        draw.line((margin, footer_y - 18, width - margin, footer_y - 18), fill=(203, 213, 225, 160), width=2)
+        user_part = self._ellipsize(user_name, small_font, 320)
         draw.text((margin, footer_y), f"用户：{user_part}", fill="#e2e8f0", font=small_font)
-        draw.text(
-            (margin, footer_y + 38),
-            "指令：/签到  /猜拳 石头 10  /兑换 商品ID 1  /兑换记录",
-            fill="#cbd5e1",
-            font=small_font,
-        )
-        draw.text(
-            (width - 365, footer_y),
-            self._now().strftime("%Y-%m-%d %H:%M"),
-            fill="#cbd5e1",
-            font=small_font,
-        )
+        draw.text((margin, footer_y + 40), "指令：签到  猜拳 石头 10  兑换 商品ID 1  兑换记录", fill="#cbd5e1", font=small_font)
+        draw.text((width - margin - 222, footer_y), self._now().strftime("%Y-%m-%d %H:%M"), fill="#cbd5e1", font=small_font)
 
         self.poster_path.parent.mkdir(parents=True, exist_ok=True)
-        img.save(self.poster_path, "PNG")
+        img.convert("RGB").save(self.poster_path, "PNG")
 
     def _draw_vertical_gradient(self, draw: Any, width: int, height: int, top: str, bottom: str) -> None:
         top_rgb = self._hex_to_rgb(top)
@@ -1490,7 +1668,33 @@ class PointsShopPlugin(Star):
         draw.ellipse((760, 90, 1260, 590), fill=(251, 113, 133, 42))
         draw.ellipse((560, 760, 1160, 1360), fill=(52, 211, 153, 38))
         layer = layer.filter(ImageFilter.GaussianBlur(28))
-        img.paste(Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB"))
+        img.alpha_composite(layer)
+
+    def _compose_poster_background(self, img: Any) -> None:
+        background_path = self._poster_background_path()
+        if background_path is not None and background_path.exists():
+            try:
+                with Image.open(background_path) as source:
+                    fitted = ImageOps.fit(source.convert("RGBA"), img.size, method=Image.Resampling.LANCZOS)
+                    img.alpha_composite(fitted)
+            except Exception as exc:
+                logger.warning(f"[PointsShop] poster background failed: {background_path} ({exc})")
+
+        glaze = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(glaze)
+        self._draw_vertical_gradient(draw, img.size[0], img.size[1], "#111827", "#1d4ed8")
+        glaze.putalpha(170)
+        img.alpha_composite(glaze)
+        self._draw_soft_circles(img)
+
+        dim = Image.new("RGBA", img.size, (15, 23, 42, 22))
+        img.alpha_composite(dim)
+
+    def _poster_texts(self) -> tuple[str, str]:
+        poster = self._poster_state()
+        title = str(poster.get("title") or "").strip() or self._cfg_str("poster_title", "积分兑换商城")
+        subtitle = str(poster.get("subtitle") or "").strip() or self._cfg_str("poster_subtitle", "签到积累，猜拳翻倍，把喜欢的奖励带回家")
+        return title, subtitle
 
     def _rounded_rect(self, draw: Any, box: tuple[int, int, int, int], radius: int, fill: Any, outline: Any = None) -> None:
         draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=2 if outline else 1)
@@ -1512,14 +1716,7 @@ class PointsShopPlugin(Star):
         try:
             with Image.open(icon_path) as source:
                 fitted = ImageOps.fit(source.convert("RGBA"), (box[2] - box[0], box[3] - box[1]), method=Image.Resampling.LANCZOS)
-                mask = Image.new("L", fitted.size, 0)
-                mask_draw = ImageDraw.Draw(mask)
-                radius = max(18, min(fitted.size) // 4)
-                mask_draw.rounded_rectangle((0, 0, fitted.size[0], fitted.size[1]), radius=radius, fill=255)
-                fitted.putalpha(mask)
-                background = Image.new("RGBA", fitted.size, self._hex_to_rgb(base_color) + (255,))
-                background.alpha_composite(fitted)
-                img.paste(background.convert("RGB"), (box[0], box[1]))
+                img.alpha_composite(fitted, (box[0], box[1]))
             return True
         except Exception as exc:
             logger.warning(f"[PointsShop] draw item icon failed: {icon_path} ({exc})")
@@ -1750,6 +1947,36 @@ class PointsShopPlugin(Star):
         encoded_id = quote(str(item_id), safe="")
         return f"/api/plug/{PLUGIN_NAME}/points-shop/admin/items/icon/get?item_id={encoded_id}"
 
+    def _poster_state(self) -> dict[str, Any]:
+        poster = self.state.setdefault("poster", {})
+        normalized = self._normalize_poster_state(poster)
+        self.state["poster"] = normalized
+        return normalized
+
+    def _poster_background_path(self) -> Path | None:
+        poster = self._poster_state()
+        background_path = self._normalize_icon_path(poster.get("background_path") or "")
+        if not background_path:
+            return None
+        resolved = (self.data_dir / background_path).resolve(strict=False)
+        try:
+            resolved.relative_to(self.data_dir.resolve(strict=False))
+        except ValueError:
+            return None
+        return resolved
+
+    def _poster_background_url(self, background_path: str = "") -> str:
+        normalized = self._normalize_icon_path(background_path or self._poster_state().get("background_path") or "")
+        if not normalized:
+            return ""
+        resolved = (self.data_dir / normalized).resolve(strict=False)
+        if not resolved.exists():
+            return ""
+        return f"/api/plug/{PLUGIN_NAME}/points-shop/admin/poster/background/get"
+
+    def _poster_preview_url(self) -> str:
+        return f"/api/plug/{PLUGIN_NAME}/points-shop/admin/poster/preview"
+
     def _set_item_icon_path(self, item_id: str, icon_path: str) -> None:
         items = self.state.setdefault("items", [])
         normalized = self._normalize_icon_path(icon_path)
@@ -1766,6 +1993,15 @@ class PointsShopPlugin(Star):
                     path.unlink()
             except Exception as exc:
                 logger.warning(f"[PointsShop] delete icon failed: {path} ({exc})")
+
+    def _delete_poster_background_file(self) -> None:
+        for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+            path = self.data_dir / f"poster_background{ext}"
+            try:
+                if path.exists():
+                    path.unlink()
+            except Exception as exc:
+                logger.warning(f"[PointsShop] delete poster background failed: {path} ({exc})")
 
     def _rename_item_icon_file(self, old_item_id: str, new_item_id: str) -> str | None:
         if not old_item_id or not new_item_id or old_item_id == new_item_id:
@@ -1818,6 +2054,43 @@ class PointsShopPlugin(Star):
         self._delete_item_icon_file(safe_item_id)
         self.item_icon_dir.mkdir(parents=True, exist_ok=True)
         save_path = self.item_icon_dir / f"{safe_item_id}{ext}"
+        save_path.write_bytes(content)
+        return save_path
+
+    async def _save_uploaded_poster_background(self, body: dict[str, Any]) -> Path | None:
+        allowed_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        files = await request.files
+        file = next(iter(files.values()), None) if files else None
+
+        if file is not None and str(getattr(file, "filename", "") or "").strip():
+            ext = Path(str(file.filename)).suffix.lower()
+            if ext not in allowed_exts:
+                raise ValueError("仅支持 png、jpg、jpeg、webp、gif 图片。")
+            self._delete_poster_background_file()
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            save_path = self.data_dir / f"poster_background{ext}"
+            await file.save(str(save_path))
+            return save_path
+
+        file_name = str(body.get("file_name") or "").strip()
+        file_data = str(body.get("file_data") or "").strip()
+        if not file_name or not file_data:
+            return None
+
+        ext = Path(file_name).suffix.lower()
+        if ext not in allowed_exts:
+            raise ValueError("仅支持 png、jpg、jpeg、webp、gif 图片。")
+
+        if "," in file_data and file_data.startswith("data:"):
+            _, file_data = file_data.split(",", 1)
+        try:
+            content = base64.b64decode(file_data, validate=True)
+        except Exception as exc:
+            raise ValueError("上传图片数据损坏，无法解析。") from exc
+
+        self._delete_poster_background_file()
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        save_path = self.data_dir / f"poster_background{ext}"
         save_path.write_bytes(content)
         return save_path
 

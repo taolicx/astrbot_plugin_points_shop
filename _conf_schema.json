@@ -188,7 +188,7 @@
   "poster_width": {
     "description": "商城海报宽度",
     "type": "int",
-    "default": 1080
+    "default": 1440
   },
   "leaderboard_limit": {
     "description": "排行榜人数",
