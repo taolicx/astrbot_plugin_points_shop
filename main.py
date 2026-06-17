@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.17"
+PLUGIN_VERSION = "0.1.18"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -2379,39 +2379,113 @@ class PointsShopPlugin(Star):
         code = " ".join(parts[1:]).strip()
         return item_key, code, note
     def _parse_adjust_payload(self, event: AstrMessageEvent, payload: str) -> tuple[str, int | None]:
-        at_user = self._extract_at_user(event)
         parts = [part for part in re.split(r"\s+", payload.strip()) if part]
+        if not parts:
+            return "", None
+
         delta: int | None = None
-        target = at_user or ""
-        for part in parts:
-            if re.fullmatch(r"[+-]?\d+", part):
-                delta = int(part)
-            elif not target:
-                target = re.sub(r"\D", "", part) or part
+        target_parts = parts
+        if re.fullmatch(r"[+-]?\d+", parts[-1]):
+            delta = int(parts[-1])
+            target_parts = parts[:-1]
+        elif len(parts) >= 2:
+            for index in range(len(parts) - 1, -1, -1):
+                if re.fullmatch(r"[+-]?\d+", parts[index]):
+                    delta = int(parts[index])
+                    target_parts = parts[:index] + parts[index + 1 :]
+                    break
+
+        target = self._resolve_target_user_id(event, target_parts)
         return target, delta
 
     def _parse_target_user_payload(self, event: AstrMessageEvent, payload: str) -> str:
-        at_user = self._extract_at_user(event)
-        if at_user:
-            return at_user
         parts = [part for part in re.split(r"\s+", str(payload or "").strip()) if part]
-        for part in parts:
-            candidate = re.sub(r"\D", "", part) or part
-            candidate = str(candidate or "").strip()
-            if candidate:
-                return candidate
-        return ""
+        return self._resolve_target_user_id(event, parts)
 
     def _extract_at_user(self, event: AstrMessageEvent) -> str:
+        candidates = self._extract_at_candidates(event)
+        return candidates[0] if candidates else ""
+
+    def _extract_at_candidates(self, event: AstrMessageEvent) -> list[str]:
+        candidates: list[str] = []
         try:
             for comp in getattr(event, "message_obj", None).message:
                 if getattr(comp, "type", "") == "At":
-                    qq = str(getattr(comp, "qq", "") or getattr(comp, "target", "") or "").strip()
-                    if qq:
-                        return qq
+                    for attr in ("qq", "target", "user_id", "uid", "openid", "id"):
+                        value = str(getattr(comp, attr, "") or "").strip()
+                        if value and value not in candidates:
+                            candidates.append(value)
         except Exception:
-            return ""
-        return ""
+            return candidates
+        return candidates
+
+    def _resolve_target_user_id(self, event: AstrMessageEvent, target_parts: list[str]) -> str:
+        candidates: list[str] = []
+        for value in self._extract_at_candidates(event):
+            self._append_unique(candidates, value)
+
+        for part in target_parts:
+            for value in self._expand_user_token_candidates(part):
+                self._append_unique(candidates, value)
+
+        known_ids = self._known_user_ids()
+        for candidate in candidates:
+            if candidate in known_ids:
+                return candidate
+
+        profiles = self.state.setdefault("profiles", {})
+        for candidate in candidates:
+            normalized = self._normalize_user_match_text(candidate)
+            if not normalized:
+                continue
+            for user_id, profile in profiles.items():
+                name = self._normalize_user_match_text(str((profile or {}).get("name") or ""))
+                if name and name == normalized:
+                    return str(user_id)
+
+        return candidates[0] if candidates else ""
+
+    def _expand_user_token_candidates(self, token: str) -> list[str]:
+        text = str(token or "").strip()
+        if not text:
+            return []
+
+        candidates: list[str] = [text]
+        stripped = text.strip("[]<>(),")
+        self._append_unique(candidates, stripped)
+
+        for prefix in ("@", "＠"):
+            if stripped.startswith(prefix):
+                self._append_unique(candidates, stripped[len(prefix) :].strip())
+
+        cq_match = re.search(r"(?:qq|target|user_id|uid|openid)=([^,\\]]+)", text, re.IGNORECASE)
+        if cq_match:
+            self._append_unique(candidates, cq_match.group(1).strip())
+
+        mention_match = re.fullmatch(r"<@!?([^>]+)>", stripped)
+        if mention_match:
+            self._append_unique(candidates, mention_match.group(1).strip())
+
+        return [value for value in candidates if value]
+
+    def _known_user_ids(self) -> set[str]:
+        keys: set[str] = set()
+        for key in ("balances", "profiles", "signins", "streaks"):
+            raw = self.state.get(key)
+            if isinstance(raw, dict):
+                keys.update(str(user_id) for user_id in raw.keys() if str(user_id).strip())
+        keys.update(self._point_admin_ids())
+        return keys
+
+    def _normalize_user_match_text(self, text: str) -> str:
+        normalized = str(text or "").strip().lstrip("@＠").strip()
+        normalized = re.sub(r"\s+", "", normalized)
+        return normalized.casefold()
+
+    def _append_unique(self, values: list[str], value: str) -> None:
+        text = str(value or "").strip()
+        if text and text not in values:
+            values.append(text)
 
     def _help_text(self) -> str:
         return (
