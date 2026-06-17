@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.16"
+PLUGIN_VERSION = "0.1.17"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -450,9 +450,9 @@ class PointsShopPlugin(Star):
         if not self._cfg_bool("enable_admin_adjust", True):
             return
         is_super_admin = self._is_admin(event)
-        is_group_manager = self._is_group_manager(event)
-        if not is_super_admin and not is_group_manager:
-            await self._reply_and_stop(event, "只有 AstrBot 管理员或当前群管理员可以调整积分。")
+        is_point_admin = self._is_point_admin(event)
+        if not is_super_admin and not is_point_admin:
+            await self._reply_and_stop(event, "只有 AstrBot 管理员或已授权的指定管理员可以调整积分。")
             return
 
         payload = self._command_payload(event, ("积分管理", "积分调整"))
@@ -465,8 +465,77 @@ class PointsShopPlugin(Star):
             new_balance = self._add_points(self._group_sid(event), target_id, delta)
             self._save_state()
 
-        actor_label = "AstrBot 管理员" if is_super_admin else "群管理员"
+        actor_label = "AstrBot 管理员" if is_super_admin else "指定管理员"
         await self._reply_and_stop(event, f"{actor_label}已调整积分：{target_id} {delta:+d}\n当前积分：{new_balance}")
+
+    @filter.command("添加管理员权限", alias={"添加积分管理员", "授权积分管理员"}, priority=100)
+    async def add_point_admin(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_admin(event):
+            await self._reply_and_stop(event, "只有 AstrBot 管理员可以添加指定管理员。")
+            return
+
+        payload = self._command_payload(event, ("添加管理员权限", "添加积分管理员", "授权积分管理员"))
+        target_id = self._parse_target_user_payload(event, payload)
+        if not target_id:
+            await self._reply_and_stop(event, "用法：添加管理员权限 <@用户或用户ID>\n例：添加管理员权限 @小明")
+            return
+
+        async with self._lock:
+            point_admins = self._point_admin_ids()
+            if target_id in point_admins:
+                await self._reply_and_stop(event, f"{target_id} 已经是指定管理员了。")
+                return
+            point_admins.append(target_id)
+            self.state["point_admins"] = point_admins
+            self._save_state()
+
+        await self._reply_and_stop(event, f"已添加指定管理员：{target_id}")
+
+    @filter.command("移除管理员权限", alias={"移除积分管理员", "取消积分管理员"}, priority=100)
+    async def remove_point_admin(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_admin(event):
+            await self._reply_and_stop(event, "只有 AstrBot 管理员可以移除指定管理员。")
+            return
+
+        payload = self._command_payload(event, ("移除管理员权限", "移除积分管理员", "取消积分管理员"))
+        target_id = self._parse_target_user_payload(event, payload)
+        if not target_id:
+            await self._reply_and_stop(event, "用法：移除管理员权限 <@用户或用户ID>\n例：移除管理员权限 @小明")
+            return
+
+        async with self._lock:
+            point_admins = self._point_admin_ids()
+            if target_id not in point_admins:
+                await self._reply_and_stop(event, f"{target_id} 当前不是指定管理员。")
+                return
+            self.state["point_admins"] = [user_id for user_id in point_admins if user_id != target_id]
+            self._save_state()
+
+        await self._reply_and_stop(event, f"已移除指定管理员：{target_id}")
+
+    @filter.command("管理员权限列表", alias={"积分管理员列表", "指定管理员列表"}, priority=100)
+    async def list_point_admins(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_admin(event):
+            await self._reply_and_stop(event, "只有 AstrBot 管理员可以查看指定管理员列表。")
+            return
+
+        async with self._lock:
+            point_admins = list(self._point_admin_ids())
+
+        if not point_admins:
+            await self._reply_and_stop(event, "当前还没有指定管理员。")
+            return
+
+        lines = ["当前指定管理员："]
+        for index, user_id in enumerate(point_admins, start=1):
+            lines.append(f"{index}. {user_id}")
+        await self._reply_and_stop(event, "\n".join(lines))
 
     @filter.command("清空其他人积分", alias={"清空他人积分", "积分清空其他人"}, priority=100)
     async def clear_other_points(self, event: AstrMessageEvent):
@@ -1151,6 +1220,7 @@ class PointsShopPlugin(Star):
         return {
             "balances": {},
             "profiles": {},
+            "point_admins": [],
             "signins": {},
             "streaks": {},
             "stock": {},
@@ -1178,6 +1248,9 @@ class PointsShopPlugin(Star):
         self.state["signins"] = self._merge_signin_state(self.state.get("signins"))
         self.state["streaks"] = self._merge_streak_state(self.state.get("streaks"))
         self.state["profiles"] = self._merge_profile_state(self.state.get("profiles"))
+        self.state["point_admins"] = self._normalize_point_admins_state(
+            self.state.get("point_admins", self.state.get("delegated_admins", self.state.get("admin_users")))
+        )
         self.state["items"] = self._normalize_items_state(self.state.get("items"))
         self.state["poster"] = self._normalize_poster_state(self.state.get("poster"))
         self.state["reward_pool"] = self._normalize_reward_pool_state(self.state.get("reward_pool"))
@@ -1257,6 +1330,25 @@ class PointsShopPlugin(Star):
         current = merged.get(user_id)
         if current is None or candidate["updated_at"] >= str(current.get("updated_at") or ""):
             merged[user_id] = candidate
+
+    def _normalize_point_admins_state(self, raw: Any) -> list[str]:
+        values: list[Any] = []
+        if isinstance(raw, dict):
+            values = [user_id for user_id, enabled in raw.items() if self._to_bool(enabled, True)]
+        elif isinstance(raw, (list, tuple, set)):
+            values = list(raw)
+        elif raw:
+            values = [raw]
+
+        admins: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            user_id = str(value or "").strip()
+            if not user_id or user_id in seen:
+                continue
+            seen.add(user_id)
+            admins.append(user_id)
+        return admins
 
     def _normalize_poster_state(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -2298,6 +2390,18 @@ class PointsShopPlugin(Star):
                 target = re.sub(r"\D", "", part) or part
         return target, delta
 
+    def _parse_target_user_payload(self, event: AstrMessageEvent, payload: str) -> str:
+        at_user = self._extract_at_user(event)
+        if at_user:
+            return at_user
+        parts = [part for part in re.split(r"\s+", str(payload or "").strip()) if part]
+        for part in parts:
+            candidate = re.sub(r"\D", "", part) or part
+            candidate = str(candidate or "").strip()
+            if candidate:
+                return candidate
+        return ""
+
     def _extract_at_user(self, event: AstrMessageEvent) -> str:
         try:
             for comp in getattr(event, "message_obj", None).message:
@@ -2319,7 +2423,10 @@ class PointsShopPlugin(Star):
             "商店 - 查看精美商品图\n"
             "兑换 <商品ID或名称> [数量] - 消耗积分兑换\n"
             "兑换记录 - 查看最近订单\n"
-            "积分管理 <用户ID或@用户> <+/-积分> - AstrBot 管理员或当前群管理员调整积分\n"
+            "积分管理 <用户ID或@用户> <+/-积分> - AstrBot 管理员或指定管理员调整积分\n"
+            "添加管理员权限 <@用户或用户ID> - 仅 AstrBot 管理员，授予插件积分管理权限\n"
+            "移除管理员权限 <@用户或用户ID> - 仅 AstrBot 管理员，移除插件积分管理权限\n"
+            "管理员权限列表 - 仅 AstrBot 管理员，查看当前指定管理员\n"
             "清空其他人积分 - 仅 AstrBot 管理员，一键清空除自己外所有人的积分\n"
             "刷新签到 - 仅 AstrBot 管理员，清除所有人今天的签到状态\n"
             "奖励入库 <商品ID> <兑换码> [| 备注] - 管理员手动补充兑换码\n"
@@ -2381,6 +2488,9 @@ class PointsShopPlugin(Star):
             "积分帮助": self.help_text,
             "兑换帮助": self.help_text,
             "商店帮助": self.help_text,
+            "管理员权限列表": self.list_point_admins,
+            "积分管理员列表": self.list_point_admins,
+            "指定管理员列表": self.list_point_admins,
             "清空其他人积分": self.clear_other_points,
             "清空他人积分": self.clear_other_points,
             "积分清空其他人": self.clear_other_points,
@@ -2403,6 +2513,12 @@ class PointsShopPlugin(Star):
             ("兑换", self.exchange),
             ("购买", self.exchange),
             ("积分兑换", self.exchange),
+            ("添加管理员权限", self.add_point_admin),
+            ("添加积分管理员", self.add_point_admin),
+            ("授权积分管理员", self.add_point_admin),
+            ("移除管理员权限", self.remove_point_admin),
+            ("移除积分管理员", self.remove_point_admin),
+            ("取消积分管理员", self.remove_point_admin),
             ("积分管理", self.manage_points),
             ("积分调整", self.manage_points),
             ("奖励入库", self.reward_pool_add),
@@ -2413,9 +2529,20 @@ class PointsShopPlugin(Star):
             ("奖励列表", self.reward_pool_list),
         )
         for prefix, handler in prefix_handlers:
-            if text == prefix or text.startswith(prefix + " "):
+            if self._matches_prefix_command(text, prefix):
                 return handler
         return None
+
+    def _matches_prefix_command(self, text: str, prefix: str) -> bool:
+        if text == prefix:
+            return True
+        if not text.startswith(prefix):
+            return False
+        if len(text) <= len(prefix):
+            return True
+        next_char = text[len(prefix)]
+        return next_char.isspace() or next_char in {"@", "＠", "["}
+
     def _normalized_text(self, event: AstrMessageEvent) -> str:
         text = str(getattr(event, "message_str", "") or "").strip()
         text = text.replace("\u3000", " ")
@@ -2510,6 +2637,14 @@ class PointsShopPlugin(Star):
             return bool(event.is_admin())
         except Exception:
             return False
+
+    def _point_admin_ids(self) -> list[str]:
+        point_admins = self._normalize_point_admins_state(self.state.get("point_admins"))
+        self.state["point_admins"] = point_admins
+        return point_admins
+
+    def _is_point_admin(self, event: AstrMessageEvent) -> bool:
+        return self._sender_id(event) in set(self._point_admin_ids())
 
     def _is_group_manager(self, event: AstrMessageEvent) -> bool:
         if not self._is_group_event(event):
