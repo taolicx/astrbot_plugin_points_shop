@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.13"
+PLUGIN_VERSION = "0.1.15"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -449,8 +449,10 @@ class PointsShopPlugin(Star):
             return
         if not self._cfg_bool("enable_admin_adjust", True):
             return
-        if not self._is_admin(event):
-            await self._reply_and_stop(event, "只有管理员可以调整积分。")
+        is_super_admin = self._is_admin(event)
+        is_group_manager = self._is_group_manager(event)
+        if not is_super_admin and not is_group_manager:
+            await self._reply_and_stop(event, "只有 AstrBot 管理员或当前群管理员可以调整积分。")
             return
 
         payload = self._command_payload(event, ("积分管理", "积分调整"))
@@ -463,7 +465,38 @@ class PointsShopPlugin(Star):
             new_balance = self._add_points(self._group_sid(event), target_id, delta)
             self._save_state()
 
-        await self._reply_and_stop(event, f"已调整积分：{target_id} {delta:+d}\n当前积分：{new_balance}")
+        actor_label = "AstrBot 管理员" if is_super_admin else "群管理员"
+        await self._reply_and_stop(event, f"{actor_label}已调整积分：{target_id} {delta:+d}\n当前积分：{new_balance}")
+
+    @filter.command("清空其他人积分", alias={"清空他人积分", "积分清空其他人"}, priority=100)
+    async def clear_other_points(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_admin(event):
+            await self._reply_and_stop(event, "只有 AstrBot 管理员可以一键清空其他人的积分。")
+            return
+
+        operator_id = self._sender_id(event)
+        async with self._lock:
+            balances = self.state.setdefault("balances", {})
+            cleared_users = 0
+            cleared_points = 0
+            for user_id in list(balances.keys()):
+                user_key = str(user_id)
+                if user_key == operator_id:
+                    continue
+                current = int(balances.get(user_key, 0) or 0)
+                if current > 0:
+                    cleared_points += current
+                balances[user_key] = 0
+                cleared_users += 1
+            self_points = int(balances.get(operator_id, 0) or 0)
+            self._save_state()
+
+        await self._reply_and_stop(
+            event,
+            f"已清空除你以外的 {cleared_users} 位用户积分，共清零 {cleared_points} 积分。\n你当前保留积分：{self_points}",
+        )
 
     @filter.command("奖励入库", alias={"入库奖励", "兑换入库"}, priority=100)
     async def reward_pool_add(self, event: AstrMessageEvent):
@@ -1571,7 +1604,7 @@ class PointsShopPlugin(Star):
 
         width = max(1320, self._cfg_int("poster_width", 1440))
         card_h = 204
-        header_h = 312
+        header_h = 352
         footer_h = 126
         gap = 28
         margin = 72
@@ -1582,8 +1615,6 @@ class PointsShopPlugin(Star):
         self._compose_poster_background(img)
         draw = ImageDraw.Draw(img)
 
-        title_font = self._font(78, bold=True)
-        sub_font = self._font(32)
         small_font = self._font(24)
         meta_font = self._font(26)
         item_font = self._font(42, bold=True)
@@ -1591,17 +1622,57 @@ class PointsShopPlugin(Star):
         desc_font = self._font(28)
         icon_font = self._font(60, bold=True)
 
-        header_box = (margin, 50, width - margin, 248)
+        header_box = (margin, 50, width - margin, 292)
         self._rounded_rect(draw, header_box, 30, fill=(247, 250, 252, 238), outline=(255, 255, 255, 72))
 
-        title, subtitle = self._poster_texts()
-        draw.text((margin + 34, 88), title, fill="#0f172a", font=title_font)
-        draw.text((margin + 38, 170), self._ellipsize(subtitle, sub_font, width - 520), fill="#475569", font=sub_font)
-
-        balance_box = (width - margin - 292, 86, width - margin - 28, 202)
+        balance_box = (width - margin - 292, 86, width - margin - 28, 214)
         self._rounded_rect(draw, balance_box, 24, fill=(15, 23, 42, 255), outline=None)
         draw.text((balance_box[0] + 24, balance_box[1] + 20), "当前积分", fill="#cbd5e1", font=small_font)
         draw.text((balance_box[0] + 24, balance_box[1] + 54), str(balance), fill="#f8fafc", font=price_font)
+
+        title, subtitle = self._poster_texts()
+        text_left = margin + 34
+        text_right = balance_box[0] - 42
+        text_width = max(280, text_right - text_left)
+        header_top = header_box[1] + 30
+        header_bottom = header_box[3] - 28
+        content_height = max(140, header_bottom - header_top)
+        title_max = 78
+        subtitle_max = 32
+        title_min = 38
+        subtitle_min = 18
+
+        while True:
+            title_font, title_lines = self._fit_wrapped_font(title, title_max, title_min, text_width, 2, bold=True)
+            sub_font, subtitle_lines = self._fit_wrapped_font(subtitle, subtitle_max, subtitle_min, text_width, 2, bold=False)
+            title_line_height = self._line_height(title_font)
+            subtitle_line_height = self._line_height(sub_font)
+            title_spacing = max(8, title_line_height // 5)
+            subtitle_spacing = max(4, subtitle_line_height // 5)
+            title_height = len(title_lines) * title_line_height + max(0, len(title_lines) - 1) * title_spacing
+            subtitle_height = len(subtitle_lines) * subtitle_line_height + max(0, len(subtitle_lines) - 1) * subtitle_spacing
+            block_gap = 18 if title_lines and subtitle_lines else 0
+            total_height = title_height + block_gap + subtitle_height
+            if total_height <= content_height or (title_max <= title_min and subtitle_max <= subtitle_min):
+                break
+            if title_max > title_min:
+                title_max -= 2
+            if subtitle_max > subtitle_min:
+                subtitle_max -= 1
+
+        current_y = header_top + max(0, (content_height - total_height) // 2)
+        for index, line in enumerate(title_lines):
+            draw.text((text_left, current_y), line, fill="#0f172a", font=title_font)
+            current_y += title_line_height
+            if index < len(title_lines) - 1:
+                current_y += title_spacing
+        if title_lines and subtitle_lines:
+            current_y += block_gap
+        for index, line in enumerate(subtitle_lines):
+            draw.text((text_left + 4, current_y), line, fill="#475569", font=sub_font)
+            current_y += subtitle_line_height
+            if index < len(subtitle_lines) - 1:
+                current_y += subtitle_spacing
 
         y = header_h
         palette = ["#2563eb", "#dc2626", "#7c3aed", "#0f766e", "#ea580c", "#d946ef"]
@@ -1706,6 +1777,62 @@ class PointsShopPlugin(Star):
         x = box[0] + (box[2] - box[0] - tw) / 2
         y = box[1] + (box[3] - box[1] - th) / 2 - 3
         draw.text((x, y), text, fill=fill, font=font)
+
+    def _line_height(self, font: Any) -> int:
+        try:
+            bbox = font.getbbox("Ag")
+            return max(1, int(bbox[3] - bbox[1]))
+        except Exception:
+            return max(1, int(getattr(font, "size", 24) or 24))
+
+    def _wrap_text_lines(self, text: str, font: Any, max_width: int) -> list[str]:
+        text = str(text or "").strip()
+        if not text:
+            return []
+        dummy = Image.new("RGB", (10, 10))
+        draw = ImageDraw.Draw(dummy)
+        lines: list[str] = []
+        for paragraph in re.split(r"\r?\n", text):
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+            current = ""
+            for char in paragraph:
+                candidate = char if not current else current + char
+                if current and draw.textlength(candidate, font=font) > max_width:
+                    lines.append(current)
+                    current = char
+                else:
+                    current = candidate
+            if current:
+                lines.append(current)
+        return lines
+
+    def _truncate_wrapped_lines(self, lines: list[str], font: Any, max_width: int, max_lines: int) -> list[str]:
+        if len(lines) <= max_lines:
+            return lines
+        clipped = list(lines[:max_lines])
+        clipped[-1] = self._ellipsize("".join(lines[max_lines - 1 :]), font, max_width)
+        return clipped
+
+    def _fit_wrapped_font(
+        self,
+        text: str,
+        max_size: int,
+        min_size: int,
+        max_width: int,
+        max_lines: int,
+        bold: bool = False,
+    ) -> tuple[Any, list[str]]:
+        min_size = max(8, min(min_size, max_size))
+        for size in range(max_size, min_size - 1, -2):
+            font = self._font(size, bold=bold)
+            lines = self._wrap_text_lines(text, font, max_width)
+            if len(lines) <= max_lines:
+                return font, lines
+        font = self._font(min_size, bold=bold)
+        lines = self._truncate_wrapped_lines(self._wrap_text_lines(text, font, max_width), font, max_width, max_lines)
+        return font, lines
 
     def _draw_item_icon(self, img: Any, item: dict[str, Any], box: tuple[int, int, int, int], font: Any, base_color: str) -> bool:
         if Image is None or ImageOps is None:
@@ -2171,6 +2298,8 @@ class PointsShopPlugin(Star):
             "商店 - 查看精美商品图\n"
             "兑换 <商品ID或名称> [数量] - 消耗积分兑换\n"
             "兑换记录 - 查看最近订单\n"
+            "积分管理 <用户ID或@用户> <+/-积分> - AstrBot 管理员或当前群管理员调整积分\n"
+            "清空其他人积分 - 仅 AstrBot 管理员，一键清空除自己外所有人的积分\n"
             "奖励入库 <商品ID> <兑换码> [| 备注] - 管理员手动补充兑换码\n"
             "奖励仓库 [商品ID] - 管理员查看兑换码仓库\n"
             "推荐在插件页面 code_manager 中批量维护兑换码。\n"
@@ -2230,6 +2359,9 @@ class PointsShopPlugin(Star):
             "积分帮助": self.help_text,
             "兑换帮助": self.help_text,
             "商店帮助": self.help_text,
+            "清空其他人积分": self.clear_other_points,
+            "清空他人积分": self.clear_other_points,
+            "积分清空其他人": self.clear_other_points,
             "奖励仓库": self.reward_pool_list,
             "兑换仓库": self.reward_pool_list,
             "奖励列表": self.reward_pool_list,
@@ -2352,6 +2484,36 @@ class PointsShopPlugin(Star):
             return bool(event.is_admin())
         except Exception:
             return False
+
+    def _is_group_manager(self, event: AstrMessageEvent) -> bool:
+        if not self._is_group_event(event):
+            return False
+
+        carriers = (
+            getattr(getattr(event, "message_obj", None), "raw_message", None),
+            getattr(event, "raw_message", None),
+            getattr(event, "message_obj", None),
+        )
+        for carrier in carriers:
+            sender = None
+            if isinstance(carrier, dict):
+                sender = carrier.get("sender")
+            elif carrier is not None:
+                sender = getattr(carrier, "sender", None)
+
+            role = ""
+            if isinstance(sender, dict):
+                role = str(sender.get("role") or "").strip().lower()
+            elif sender is not None:
+                try:
+                    role = str(getattr(sender, "role", "") or "").strip().lower()
+                except Exception:
+                    role = ""
+
+            if role in {"owner", "admin"}:
+                return True
+
+        return False
 
     def _resolve_path(self, raw: str) -> Path:
         text = str(raw or "").strip()
