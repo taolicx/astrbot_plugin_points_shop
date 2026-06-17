@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.15"
+PLUGIN_VERSION = "0.1.16"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -497,6 +497,27 @@ class PointsShopPlugin(Star):
             event,
             f"已清空除你以外的 {cleared_users} 位用户积分，共清零 {cleared_points} 积分。\n你当前保留积分：{self_points}",
         )
+
+    @filter.command("刷新签到", alias={"重置签到", "清空今日签到", "重置今日签到"}, priority=100)
+    async def refresh_signins(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_admin(event):
+            await self._reply_and_stop(event, "只有 AstrBot 管理员可以刷新签到。")
+            return
+
+        today = self._today()
+        async with self._lock:
+            signins = self.state.setdefault("signins", {})
+            cleared_users = 0
+            for user_id in list(signins.keys()):
+                if str(signins.get(user_id) or "") != today:
+                    continue
+                signins.pop(user_id, None)
+                cleared_users += 1
+            self._save_state()
+
+        await self._reply_and_stop(event, f"已刷新签到，清除了 {cleared_users} 位用户今天的签到状态。")
 
     @filter.command("奖励入库", alias={"入库奖励", "兑换入库"}, priority=100)
     async def reward_pool_add(self, event: AstrMessageEvent):
@@ -2300,6 +2321,7 @@ class PointsShopPlugin(Star):
             "兑换记录 - 查看最近订单\n"
             "积分管理 <用户ID或@用户> <+/-积分> - AstrBot 管理员或当前群管理员调整积分\n"
             "清空其他人积分 - 仅 AstrBot 管理员，一键清空除自己外所有人的积分\n"
+            "刷新签到 - 仅 AstrBot 管理员，清除所有人今天的签到状态\n"
             "奖励入库 <商品ID> <兑换码> [| 备注] - 管理员手动补充兑换码\n"
             "奖励仓库 [商品ID] - 管理员查看兑换码仓库\n"
             "推荐在插件页面 code_manager 中批量维护兑换码。\n"
@@ -2362,6 +2384,10 @@ class PointsShopPlugin(Star):
             "清空其他人积分": self.clear_other_points,
             "清空他人积分": self.clear_other_points,
             "积分清空其他人": self.clear_other_points,
+            "刷新签到": self.refresh_signins,
+            "重置签到": self.refresh_signins,
+            "清空今日签到": self.refresh_signins,
+            "重置今日签到": self.refresh_signins,
             "奖励仓库": self.reward_pool_list,
             "兑换仓库": self.reward_pool_list,
             "奖励列表": self.reward_pool_list,
