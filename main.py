@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.22"
+PLUGIN_VERSION = "0.1.23"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -258,7 +258,6 @@ class PointsShopPlugin(Star):
             win_rate_basis = balance
             self._add_points(group_sid, user_id, -bet)
             bot_move = self._choose_rps_bot_move_for_score(move, win_rate_basis)
-            win_rate = self._rps_win_rate_for_score(win_rate_basis)
             if move == bot_move:
                 self._add_points(group_sid, user_id, bet)
                 result = "平局，本金已返还。"
@@ -280,7 +279,7 @@ class PointsShopPlugin(Star):
             event,
             f"你出了 {MOVE_ICONS[move]} {MOVE_LABELS[move]}\n"
             f"我出了 {MOVE_ICONS[bot_move]} {MOVE_LABELS[bot_move]}\n"
-            f"{result}\n本档胜率：{win_rate}%\n当前积分：{new_balance}",
+            f"{result}\n当前积分：{new_balance}",
         )
 
     @filter.command("彩票", alias={"积分彩票"}, priority=100)
@@ -3502,7 +3501,7 @@ class PointsShopPlugin(Star):
             "签到 - 每日签到领取积分（所有群聊共享积分）\n"
             "积分 - 查看当前积分余额\n"
             "积分排行 - 查看全局积分排行榜\n"
-            f"猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，胜率按你当前积分档位计算\n"
+            f"猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，结果按你当前积分档位结算\n"
             f"彩票 <1-10> <积分> - 下注彩票，范围 {self._lottery_min_bet()}~{self._lottery_max_bet()}，每期每人限参与 1 次，中奖 {self._lottery_multiplier()} 倍\n"
             "彩票 开奖 - 管理员立即结算当期彩票\n"
             "彩票 设奖 <1-10|随机> - 管理员指定或清除本期开奖数字\n"

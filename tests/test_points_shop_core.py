@@ -139,6 +139,8 @@ class DummyEvent:
         )
         self.raw_message = {"group_name": "测试群"}
         self.message_str = ""
+        self.sent_results = []
+        self.stopped = False
 
     def get_group_id(self):
         return self._group_id
@@ -154,6 +156,15 @@ class DummyEvent:
 
     def is_admin(self):
         return self._is_admin
+
+    def plain_result(self, text):
+        return text
+
+    async def send(self, payload):
+        self.sent_results.append(payload)
+
+    def stop_event(self):
+        self.stopped = True
 
 
 STAR_TOOLS, REQUEST_STUB = install_stub_modules()
@@ -203,6 +214,22 @@ class PointsShopCoreTests(unittest.TestCase):
         plugin.state["admin_settings"] = plugin._normalize_admin_settings_state({"rps_segment_win_rates": ""})
         self.assertEqual(plugin._rps_segments(), [])
         self.assertEqual(plugin._rps_win_rate_for_score(5), 33)
+
+    def test_rps_reply_hides_win_rate_from_players(self):
+        plugin = self.make_plugin({"min_bet": 1, "max_bet": 100})
+        event = DummyEvent(user_id="u1", user_name="张三")
+        event.message_str = "猜拳 石头 10"
+        plugin._add_points(plugin._group_sid(event), plugin._sender_id(event), 100)
+        plugin._choose_rps_bot_move_for_score = lambda move, score: "scissors"
+
+        asyncio.run(plugin.rps(event))
+
+        self.assertTrue(event.stopped)
+        self.assertTrue(event.sent_results)
+        reply = event.sent_results[-1]
+        self.assertIn("当前积分：110", reply)
+        self.assertNotIn("胜率", reply)
+        self.assertNotIn("本档", reply)
 
     def test_lottery_one_bet_per_user_per_issue_and_draw(self):
         plugin = self.make_plugin()
