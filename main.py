@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.20"
+PLUGIN_VERSION = "0.1.21"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -130,6 +130,7 @@ class PointsShopPlugin(Star):
             return
         if not self._is_group_event(event):
             return
+        self._remember_group(event)
         if self._looks_like_explicit_command(event):
             return
 
@@ -254,9 +255,10 @@ class PointsShopPlugin(Star):
                 await self._reply_and_stop(event, f"积分不够下注。\n当前积分：{balance}\n本次需要：{bet}")
                 return
 
+            win_rate_basis = balance
             self._add_points(group_sid, user_id, -bet)
-            bot_move = self._choose_rps_bot_move_for_bet(move, bet)
-            win_rate = self._rps_win_rate_for_bet(bet)
+            bot_move = self._choose_rps_bot_move_for_score(move, win_rate_basis)
+            win_rate = self._rps_win_rate_for_score(win_rate_basis)
             if move == bot_move:
                 self._add_points(group_sid, user_id, bet)
                 result = "平局，本金已返还。"
@@ -302,8 +304,9 @@ class PointsShopPlugin(Star):
                     f"当前彩票期号：第 {issue} 期",
                     f"下注范围：{self._lottery_min_bet()}~{self._lottery_max_bet()} 积分",
                     f"中奖倍率：{self._lottery_multiplier()} 倍",
-                    f"当前下注数：{len(bets)}",
+                    f"当前参与人数：{len({str(bet.get('user_id') or '') for bet in bets})}",
                     f"后台指定号码：{forced if forced is not None else '未指定，开奖时随机'}",
+                    "规则：每期每人只能选择 1 个号码参与 1 次。",
                 ]
                 await self._reply_and_stop(event, "\n".join(lines))
             return
@@ -376,6 +379,18 @@ class PointsShopPlugin(Star):
             balance = self._balance(group_sid, user_id)
             if balance < stake:
                 await self._reply_and_stop(event, f"积分不足。\n当前积分：{balance}\n本次需要：{stake}")
+                return
+            issue = self._lottery_issue()
+            current_issue_bets = self._lottery_bets(issue)
+            existing_user_bet = next(
+                (bet for bet in current_issue_bets if str(bet.get("user_id") or "") == user_id),
+                None,
+            )
+            if existing_user_bet is not None:
+                await self._reply_and_stop(
+                    event,
+                    f"你本期已经参与过了：号码 {existing_user_bet.get('number')}，下注 {existing_user_bet.get('stake')} 积分。\n请等待开奖后再参与下一期。",
+                )
                 return
             self._add_points(group_sid, user_id, -stake)
             issue, user_bets = self._place_lottery_bet(event, number, stake)
@@ -1619,6 +1634,7 @@ class PointsShopPlugin(Star):
             "last_issue_closed": int(lottery.get("last_issue_closed") or 0),
             "bets": bets,
             "bet_count": len(bets),
+            "participant_count": len({str(bet.get("user_id") or "") for bet in bets}),
         }
 
     def _serialize_notice_settings(self) -> dict[str, Any]:
@@ -1653,7 +1669,7 @@ class PointsShopPlugin(Star):
             }
             for item in groups_map.values()
         ]
-        groups.sort(key=lambda item: item["label"])
+        groups.sort(key=lambda item: (item["group_name"] or "", item["group_id"] or "", item["group_sid"]))
         return {
             "jobs": jobs,
             "known_groups": groups,
@@ -2616,7 +2632,7 @@ class PointsShopPlugin(Star):
         return move, bet
 
     def _choose_rps_bot_move(self, player_move: str) -> str:
-        win_rate = self._rps_win_rate_for_bet(0)
+        win_rate = self._rps_win_rate_for_score(0)
         draw_rate = self._rps_draw_rate()
         roll = random.uniform(0, 100)
         if roll < win_rate:
@@ -2625,8 +2641,8 @@ class PointsShopPlugin(Star):
             return player_move
         return LOSE_MAP[player_move]
 
-    def _choose_rps_bot_move_for_bet(self, player_move: str, bet: int) -> str:
-        win_rate = self._rps_win_rate_for_bet(bet)
+    def _choose_rps_bot_move_for_score(self, player_move: str, score: int) -> str:
+        win_rate = self._rps_win_rate_for_score(score)
         draw_rate = self._rps_draw_rate()
         roll = random.uniform(0, 100)
         if roll < win_rate:
@@ -2798,11 +2814,16 @@ class PointsShopPlugin(Star):
                 group_name = str(getattr(carrier, "group_name", "") or getattr(carrier, "group", "") or "").strip()
             if group_name:
                 break
-        self._known_groups()[group_sid] = {
+        next_info = {
             "platform_id": event.get_platform_id(),
             "group_id": self._group_id(event),
             "group_name": group_name,
         }
+        groups = self._known_groups()
+        if groups.get(group_sid) == next_info:
+            return
+        groups[group_sid] = next_info
+        self._save_state()
 
     def _notice_jobs(self) -> list[dict[str, Any]]:
         jobs = self._normalize_notice_jobs_state(self.state.get("notice_jobs"))
@@ -2924,13 +2945,13 @@ class PointsShopPlugin(Star):
             normalized.append(item)
         return normalized
 
-    def _rps_win_rate_for_bet(self, bet: int) -> int:
+    def _rps_win_rate_for_score(self, score: int) -> int:
         for segment in self._rps_segments():
             min_bet = int(segment.get("min") or 0)
             max_bet = int(segment.get("max") or -1)
-            if bet < min_bet:
+            if score < min_bet:
                 continue
-            if max_bet >= 0 and bet > max_bet:
+            if max_bet >= 0 and score > max_bet:
                 continue
             return self._percent(int(segment.get("win_rate") or 0))
         return self._rps_win_rate()
@@ -3462,8 +3483,8 @@ class PointsShopPlugin(Star):
             "签到 - 每日签到领取积分（所有群聊共享积分）\n"
             "积分 - 查看当前积分余额\n"
             "积分排行 - 查看全局积分排行榜\n"
-            f"猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，默认胜率 {self._rps_win_rate()}%\n"
-            f"彩票 <1-10> <积分> - 下注彩票，范围 {self._lottery_min_bet()}~{self._lottery_max_bet()}，中奖 {self._lottery_multiplier()} 倍\n"
+            f"猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，胜率按你当前积分档位计算\n"
+            f"彩票 <1-10> <积分> - 下注彩票，范围 {self._lottery_min_bet()}~{self._lottery_max_bet()}，每期每人限参与 1 次，中奖 {self._lottery_multiplier()} 倍\n"
             "彩票 开奖 - 管理员立即结算当期彩票\n"
             "彩票 设奖 <1-10|随机> - 管理员指定或清除本期开奖数字\n"
             "商店 - 查看精美商品图\n"

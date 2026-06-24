@@ -307,6 +307,35 @@
       box-shadow: none;
     }
 
+    .checkbox-list {
+      display: grid;
+      gap: 8px;
+      max-height: 220px;
+      overflow: auto;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .checkbox-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .checkbox-item input {
+      width: auto;
+      min-height: auto;
+      margin: 2px 0 0;
+      padding: 0;
+      box-shadow: none;
+      flex: 0 0 auto;
+    }
+
     .hint {
       color: var(--muted);
       font-size: 12px;
@@ -688,7 +717,7 @@
             <div class="section-title">
               <div>
                 <h2>玩法与通知</h2>
-                <p>集中设置剪刀石头布分段胜率、彩票倍率/指定开奖，以及周期性全体通知。</p>
+                <p>集中设置猜拳积分档胜率、彩票倍率/开奖方式，以及周期性群通知。</p>
               </div>
               <div class="actions">
                 <button class="primary" id="saveGameSettingsBtn" type="button">保存玩法设置</button>
@@ -707,8 +736,8 @@
                   <input id="rpsDrawRateInput" type="number" min="0" max="100" step="1" />
                 </div>
                 <div class="field span-2">
-                  <label for="rpsSegmentsInput">分段胜率</label>
-                  <textarea id="rpsSegmentsInput" placeholder="示例：5-5:60&#10;10-10:45&#10;11-50:35&#10;51-*:20"></textarea>
+                  <label for="rpsSegmentsInput">积分档胜率</label>
+                  <textarea id="rpsSegmentsInput" placeholder="示例：0-50:60&#10;51-200:45&#10;201-500:35&#10;501-*:20"></textarea>
                 </div>
               </div>
 
@@ -727,7 +756,7 @@
                 </div>
                 <div class="field">
                   <label for="lotteryForcedNumberInput">指定开奖号码</label>
-                  <input id="lotteryForcedNumberInput" type="number" min="1" max="10" step="1" placeholder="留空为随机开奖" />
+                  <input id="lotteryForcedNumberInput" type="number" min="1" max="10" step="1" placeholder="留空为随机；开奖仍需手动触发" />
                 </div>
               </div>
 
@@ -746,8 +775,8 @@
                   <input id="noticeIntervalInput" type="number" min="1" step="1" />
                 </div>
                 <div class="field span-2">
-                  <label for="noticeGroupSelect">通知群聊</label>
-                  <select id="noticeGroupSelect" multiple size="5"></select>
+                  <label for="noticeGroupSelect">通知群聊（可多选）</label>
+                  <div id="noticeGroupSelect" class="checkbox-list"></div>
                 </div>
                 <div class="field span-2">
                   <label for="noticeContentInput">通知内容</label>
@@ -1524,11 +1553,16 @@
     function renderNoticeGroups() {
       const groups = state.settings?.notices?.known_groups || [];
       if (!groups.length) {
-        elements.noticeGroupSelect.innerHTML = `<option value="">暂无已记录群聊</option>`;
+        elements.noticeGroupSelect.innerHTML = `<div class="hint">暂无已记录群聊。先在目标群里用一次签到、积分、商店、猜拳、彩票或通知相关指令，让插件记住这个群。</div>`;
         return;
       }
       elements.noticeGroupSelect.innerHTML = groups
-        .map((group) => `<option value="${escapeHtml(group.group_sid)}">${escapeHtml(group.label || group.group_sid)}</option>`)
+        .map((group) => `
+          <label class="checkbox-item">
+            <input type="checkbox" value="${escapeHtml(group.group_sid)}" />
+            <span>${escapeHtml(group.label || group.group_sid)}</span>
+          </label>
+        `)
         .join("");
     }
 
@@ -1557,12 +1591,9 @@
         elements.noticeContentInput.value = "";
         elements.noticeEnabledInput.checked = true;
         elements.noticeAtAllInput.checked = true;
-        Array.from(elements.noticeGroupSelect.options).forEach((option) => {
-          option.selected = false;
+        Array.from(elements.noticeGroupSelect.querySelectorAll('input[type="checkbox"]')).forEach((input) => {
+          input.checked = false;
         });
-        if (elements.noticeGroupSelect.options.length) {
-          elements.noticeGroupSelect.options[0].selected = true;
-        }
         elements.deleteNoticeBtn.disabled = true;
         elements.sendNoticeBtn.disabled = true;
         return;
@@ -1573,8 +1604,8 @@
       elements.noticeEnabledInput.checked = notice.enabled !== false;
       elements.noticeAtAllInput.checked = notice.at_all !== false;
       const selected = new Set(notice.group_sids || []);
-      Array.from(elements.noticeGroupSelect.options).forEach((option) => {
-        option.selected = selected.has(option.value);
+      Array.from(elements.noticeGroupSelect.querySelectorAll('input[type="checkbox"]')).forEach((input) => {
+        input.checked = selected.has(input.value);
       });
       elements.deleteNoticeBtn.disabled = false;
       elements.sendNoticeBtn.disabled = false;
@@ -1593,7 +1624,7 @@
       elements.lotteryMaxBetInput.value = String(lottery.max_bet ?? 100);
       elements.lotteryMultiplierInput.value = String(lottery.multiplier ?? 8);
       elements.lotteryForcedNumberInput.value = lottery.forced_number ?? "";
-      elements.lotteryMeta.textContent = `当前期号：${lottery.issue ?? "-"}，本期下注：${lottery.bet_count ?? 0}，上期开奖：${lottery.last_draw_number ?? "-"}`;
+      elements.lotteryMeta.textContent = `当前期号：${lottery.issue ?? "-"}，本期参与：${lottery.bet_count ?? 0}，上期开奖：${lottery.last_draw_number ?? "-"}。每期每人仅可参与 1 次，开奖需手动触发。`;
 
       if (!state.selectedNoticeId && notices.jobs?.length) {
         state.selectedNoticeId = notices.jobs[0].id;
@@ -1966,7 +1997,9 @@
     }
 
     function selectedNoticeGroupSids() {
-      return Array.from(elements.noticeGroupSelect.selectedOptions || []).map((option) => option.value).filter(Boolean);
+      return Array.from(elements.noticeGroupSelect.querySelectorAll('input[type="checkbox"]:checked'))
+        .map((input) => input.value)
+        .filter(Boolean);
     }
 
     async function handleSaveGameSettings() {

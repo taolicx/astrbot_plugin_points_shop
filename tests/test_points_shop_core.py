@@ -195,16 +195,16 @@ class PointsShopCoreTests(unittest.TestCase):
             {"rps_segment_win_rates": "1-5:60\n6-10:45\n11-50:35\n51-*:20"}
         )
         self.assertEqual(plugin._rps_segments()[0]["win_rate"], 60)
-        self.assertEqual(plugin._rps_win_rate_for_bet(5), 60)
-        self.assertEqual(plugin._rps_win_rate_for_bet(10), 45)
-        self.assertEqual(plugin._rps_win_rate_for_bet(25), 35)
-        self.assertEqual(plugin._rps_win_rate_for_bet(88), 20)
+        self.assertEqual(plugin._rps_win_rate_for_score(5), 60)
+        self.assertEqual(plugin._rps_win_rate_for_score(10), 45)
+        self.assertEqual(plugin._rps_win_rate_for_score(25), 35)
+        self.assertEqual(plugin._rps_win_rate_for_score(88), 20)
 
         plugin.state["admin_settings"] = plugin._normalize_admin_settings_state({"rps_segment_win_rates": ""})
         self.assertEqual(plugin._rps_segments(), [])
-        self.assertEqual(plugin._rps_win_rate_for_bet(5), 33)
+        self.assertEqual(plugin._rps_win_rate_for_score(5), 33)
 
-    def test_lottery_bet_merge_and_draw(self):
+    def test_lottery_one_bet_per_user_per_issue_and_draw(self):
         plugin = self.make_plugin()
         plugin.state["admin_settings"] = plugin._normalize_admin_settings_state(
             {"lottery_min_bet": 1, "lottery_max_bet": 100, "lottery_multiplier": 8}
@@ -215,22 +215,18 @@ class PointsShopCoreTests(unittest.TestCase):
         self.assertEqual(issue, 1)
         self.assertEqual(len(user_bets), 1)
         self.assertEqual(user_bets[0]["stake"], 10)
-
-        issue, user_bets = plugin._place_lottery_bet(event, 5, 15)
-        self.assertEqual(issue, 1)
-        self.assertEqual(len(user_bets), 1)
-        self.assertEqual(user_bets[0]["stake"], 25)
-
-        issue, user_bets = plugin._place_lottery_bet(event, 3, 7)
-        self.assertEqual(issue, 1)
-        self.assertEqual(sorted(entry["number"] for entry in user_bets), [3, 5])
+        current_issue_bets = plugin._lottery_bets(issue)
+        user_bet = next((bet for bet in current_issue_bets if bet["user_id"] == "u1"), None)
+        self.assertIsNotNone(user_bet)
+        self.assertEqual(user_bet["number"], 5)
+        self.assertEqual(user_bet["stake"], 10)
 
         plugin._set_lottery_forced_number(5)
         result = plugin._draw_lottery()
         self.assertEqual(result["draw_number"], 5)
         self.assertEqual(result["winner_count"], 1)
-        self.assertEqual(result["reward_total"], 200)
-        self.assertEqual(plugin._balance("qq:GroupMessage:100", "u1"), 200)
+        self.assertEqual(result["reward_total"], 80)
+        self.assertEqual(plugin._balance("qq:GroupMessage:100", "u1"), 80)
         self.assertEqual(plugin._lottery_issue(), 2)
         self.assertIsNone(plugin._lottery_current_forced_number())
         self.assertEqual(plugin._lottery_bets(1), [])
