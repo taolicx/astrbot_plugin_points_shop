@@ -220,6 +220,10 @@ class PointsShopCoreTests(unittest.TestCase):
         self.assertIsNotNone(user_bet)
         self.assertEqual(user_bet["number"], 5)
         self.assertEqual(user_bet["stake"], 10)
+        stats = plugin._lottery_number_stats(current_issue_bets)
+        self.assertEqual(stats[5]["users"], 1)
+        self.assertEqual(stats[5]["stake"], 10)
+        self.assertEqual(stats[1]["users"], 0)
 
         plugin._set_lottery_forced_number(5)
         result = plugin._draw_lottery()

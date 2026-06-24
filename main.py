@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.21"
+PLUGIN_VERSION = "0.1.22"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -301,13 +301,18 @@ class PointsShopPlugin(Star):
                 bets = self._lottery_bets(issue)
                 forced = self._lottery_current_forced_number()
                 lines = [
-                    f"当前彩票期号：第 {issue} 期",
                     f"下注范围：{self._lottery_min_bet()}~{self._lottery_max_bet()} 积分",
                     f"中奖倍率：{self._lottery_multiplier()} 倍",
                     f"当前参与人数：{len({str(bet.get('user_id') or '') for bet in bets})}",
                     f"后台指定号码：{forced if forced is not None else '未指定，开奖时随机'}",
                     "规则：每期每人只能选择 1 个号码参与 1 次。",
                 ]
+                number_stats = self._lottery_number_stats(bets)
+                lines.append("当前号码分布：")
+                lines.extend(
+                    f"{number} 号：{stats['users']} 人"
+                    for number, stats in number_stats.items()
+                )
                 await self._reply_and_stop(event, "\n".join(lines))
             return
 
@@ -326,7 +331,7 @@ class PointsShopPlugin(Star):
             if len(result["winners"]) > 10:
                 winner_lines.append(f"... 其余 {len(result['winners']) - 10} 位中奖者未展开")
             lines = [
-                f"彩票第 {result['issue']} 期开奖完成",
+                "彩票已开奖",
                 f"开奖号码：{result['draw_number']}",
                 f"中奖人数：{result['winner_count']}",
                 f"发放总积分：{result['reward_total']}",
@@ -400,7 +405,7 @@ class PointsShopPlugin(Star):
         bet_desc = "，".join(f"{entry['number']}号 x {entry['stake']}" for entry in sorted(user_bets, key=lambda item: int(item["number"])))
         await self._reply_and_stop(
             event,
-            f"已下注成功，第 {issue} 期\n你的投注：{bet_desc}\n中奖倍率：{self._lottery_multiplier()} 倍\n当前积分：{new_balance}",
+            f"已下注成功\n你的投注：{bet_desc}\n中奖倍率：{self._lottery_multiplier()} 倍\n当前积分：{new_balance}",
         )
     @filter.command("兑换商城", alias={"商店", "积分商城", "商品列表", "兑换列表"}, priority=100)
     async def shop(self, event: AstrMessageEvent):
@@ -1243,7 +1248,7 @@ class PointsShopPlugin(Star):
         async with self._lock:
             result = self._draw_lottery()
             self._save_state()
-        return self._api_ok(result, f"第 {result['issue']} 期开奖完成。")
+        return self._api_ok(result, "彩票开奖完成。")
 
     async def api_admin_notice_save(self):
         body = await self._request_json()
@@ -1635,6 +1640,7 @@ class PointsShopPlugin(Star):
             "bets": bets,
             "bet_count": len(bets),
             "participant_count": len({str(bet.get("user_id") or "") for bet in bets}),
+            "number_stats": self._lottery_number_stats(bets),
         }
 
     def _serialize_notice_settings(self) -> dict[str, Any]:
@@ -2976,6 +2982,19 @@ class PointsShopPlugin(Star):
         if issue is None:
             return bets
         return [bet for bet in bets if int(bet.get("issue") or 0) == int(issue)]
+
+    def _lottery_number_stats(self, bets: list[dict[str, Any]]) -> dict[int, dict[str, int]]:
+        stats: dict[int, dict[str, int]] = {
+            number: {"users": 0, "stake": 0}
+            for number in range(1, 11)
+        }
+        for bet in bets:
+            number = self._lottery_number_or_none(bet.get("number"))
+            if number is None:
+                continue
+            stats[number]["users"] += 1
+            stats[number]["stake"] += max(0, int(bet.get("stake") or 0))
+        return stats
 
     def _lottery_multiplier(self) -> int:
         return max(2, int(self._admin_settings().get("lottery_multiplier") or 8))

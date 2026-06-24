@@ -762,8 +762,9 @@
 
               <div class="actions">
                 <button class="secondary" id="drawLotteryBtn" type="button">立即开奖</button>
-                <div class="hint" id="lotteryMeta">当前期号：-</div>
+                <div class="hint" id="lotteryMeta">当前参与：-</div>
               </div>
+              <div class="hint" id="lotteryNumberStats">号码分布：-</div>
 
               <div class="field-grid">
                 <div class="field">
@@ -1096,6 +1097,7 @@
       lotteryForcedNumberInput: document.getElementById("lotteryForcedNumberInput"),
       drawLotteryBtn: document.getElementById("drawLotteryBtn"),
       lotteryMeta: document.getElementById("lotteryMeta"),
+      lotteryNumberStats: document.getElementById("lotteryNumberStats"),
       noticeNameInput: document.getElementById("noticeNameInput"),
       noticeIntervalInput: document.getElementById("noticeIntervalInput"),
       noticeGroupSelect: document.getElementById("noticeGroupSelect"),
@@ -1624,7 +1626,14 @@
       elements.lotteryMaxBetInput.value = String(lottery.max_bet ?? 100);
       elements.lotteryMultiplierInput.value = String(lottery.multiplier ?? 8);
       elements.lotteryForcedNumberInput.value = lottery.forced_number ?? "";
-      elements.lotteryMeta.textContent = `当前期号：${lottery.issue ?? "-"}，本期参与：${lottery.bet_count ?? 0}，上期开奖：${lottery.last_draw_number ?? "-"}。每期每人仅可参与 1 次，开奖需手动触发。`;
+      elements.lotteryMeta.textContent = `当前参与：${lottery.participant_count ?? lottery.bet_count ?? 0}，上期开奖：${lottery.last_draw_number ?? "-"}。每期每人仅可参与 1 次，开奖需手动触发。`;
+      const numberStats = lottery.number_stats || {};
+      const numberSummary = Array.from({ length: 10 }, (_, index) => {
+        const number = index + 1;
+        const users = Number(numberStats[number]?.users ?? numberStats[String(number)]?.users ?? 0);
+        return `${number}号 ${users}人`;
+      }).join(" / ");
+      elements.lotteryNumberStats.textContent = `号码分布：${numberSummary}`;
 
       if (!state.selectedNoticeId && notices.jobs?.length) {
         state.selectedNoticeId = notices.jobs[0].id;
@@ -2037,7 +2046,7 @@
       try {
         const payload = await apiPost("lottery/draw", {});
         await loadSettings();
-        showStatus(payload.message || `第 ${payload.data?.issue || "-"} 期开奖完成。`, "info");
+        showStatus(payload.message || "彩票开奖完成。", "info");
       } catch (error) {
         showStatus(error.message || "开奖失败。", "error");
       } finally {
