@@ -209,5 +209,32 @@
     "description": "最多保留猜拳记录数",
     "type": "int",
     "default": 500
+  },
+  "rps_segment_win_rates": {
+    "description": "猜拳分段胜率",
+    "type": "string",
+    "default": "",
+    "hint": "格式示例：5-5:60,10-10:45,11-50:35,51-*:20。留空则只使用默认胜率。"
+  },
+  "lottery_min_bet": {
+    "description": "彩票最小下注",
+    "type": "int",
+    "default": 5
+  },
+  "lottery_max_bet": {
+    "description": "彩票最大下注",
+    "type": "int",
+    "default": 100
+  },
+  "lottery_multiplier": {
+    "description": "彩票中奖倍率",
+    "type": "int",
+    "default": 8
+  },
+  "scheduler_tick_seconds": {
+    "description": "通知任务轮询秒数",
+    "type": "int",
+    "default": 20,
+    "hint": "用于检查周期性通知是否到期发送，建议不要低于 10。"
   }
 }

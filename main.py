@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.18"
+PLUGIN_VERSION = "0.1.20"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -68,6 +68,13 @@ WIN_MAP = {
 LOSE_MAP = {loser: winner for winner, loser in WIN_MAP.items()}
 
 
+async def _run_in_thread(func, *args, **kwargs):
+    to_thread = getattr(asyncio, "to_thread", None)
+    if callable(to_thread):
+        return await to_thread(func, *args, **kwargs)
+    return func(*args, **kwargs)
+
+
 @register(
     PLUGIN_NAME,
     "codex",
@@ -89,20 +96,32 @@ class PointsShopPlugin(Star):
         self.state: dict[str, Any] = self._default_state()
         self._lock = asyncio.Lock()
         self._handled_message_keys: dict[str, float] = {}
+        self._scheduler_task: asyncio.Task | None = None
 
     async def initialize(self):
         self._migrate_legacy_storage()
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.poster_path.parent.mkdir(parents=True, exist_ok=True)
         self.item_icon_dir.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(self._load_state)
-        await asyncio.to_thread(self._sync_stock_from_config)
-        await asyncio.to_thread(self._save_state)
+        await _run_in_thread(self._load_state)
+        await _run_in_thread(self._sync_stock_from_config)
+        await _run_in_thread(self._save_state)
         self._register_web_apis()
+        if self._scheduler_task is None or self._scheduler_task.done():
+            self._scheduler_task = asyncio.create_task(self._scheduler_loop())
         logger.info("[PointsShop] initialized")
 
     async def terminate(self):
-        await asyncio.to_thread(self._save_state)
+        if self._scheduler_task is not None:
+            self._scheduler_task.cancel()
+            try:
+                await self._scheduler_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning(f"[PointsShop] scheduler stop failed: {exc}")
+            self._scheduler_task = None
+        await _run_in_thread(self._save_state)
         logger.info("[PointsShop] terminated")
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=90)
@@ -134,6 +153,7 @@ class PointsShopPlugin(Star):
                 return
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
+            self._remember_group(event)
             self._remember_user(event)
 
             today = self._today()
@@ -167,6 +187,7 @@ class PointsShopPlugin(Star):
             return
 
         async with self._lock:
+            self._remember_group(event)
             self._remember_user(event)
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
@@ -183,6 +204,7 @@ class PointsShopPlugin(Star):
             return
 
         async with self._lock:
+            self._remember_group(event)
             balances = dict(self.state.setdefault("balances", {}))
             profiles = dict(self.state.setdefault("profiles", {}))
 
@@ -225,6 +247,7 @@ class PointsShopPlugin(Star):
                 return
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
+            self._remember_group(event)
             self._remember_user(event)
             balance = self._balance(group_sid, user_id)
             if balance < bet:
@@ -232,7 +255,8 @@ class PointsShopPlugin(Star):
                 return
 
             self._add_points(group_sid, user_id, -bet)
-            bot_move = self._choose_rps_bot_move(move)
+            bot_move = self._choose_rps_bot_move_for_bet(move, bet)
+            win_rate = self._rps_win_rate_for_bet(bet)
             if move == bot_move:
                 self._add_points(group_sid, user_id, bet)
                 result = "平局，本金已返还。"
@@ -254,7 +278,114 @@ class PointsShopPlugin(Star):
             event,
             f"你出了 {MOVE_ICONS[move]} {MOVE_LABELS[move]}\n"
             f"我出了 {MOVE_ICONS[bot_move]} {MOVE_LABELS[bot_move]}\n"
-            f"{result}\n当前积分：{new_balance}",
+            f"{result}\n本档胜率：{win_rate}%\n当前积分：{new_balance}",
+        )
+
+    @filter.command("彩票", alias={"积分彩票"}, priority=100)
+    async def lottery(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_group_event(event):
+            await self._reply_and_stop(event, "彩票需要在群聊里进行。")
+            return
+
+        payload = self._command_payload(event, ("彩票", "积分彩票"))
+        action, number, stake = self._parse_lottery_payload(payload)
+        if action == "status":
+            async with self._lock:
+                self._remember_group(event)
+                lottery = self._lottery_state()
+                issue = self._lottery_issue()
+                bets = self._lottery_bets(issue)
+                forced = self._lottery_current_forced_number()
+                lines = [
+                    f"当前彩票期号：第 {issue} 期",
+                    f"下注范围：{self._lottery_min_bet()}~{self._lottery_max_bet()} 积分",
+                    f"中奖倍率：{self._lottery_multiplier()} 倍",
+                    f"当前下注数：{len(bets)}",
+                    f"后台指定号码：{forced if forced is not None else '未指定，开奖时随机'}",
+                ]
+                await self._reply_and_stop(event, "\n".join(lines))
+            return
+
+        if action == "draw":
+            if not (self._is_admin(event) or self._is_point_admin(event)):
+                await self._reply_and_stop(event, "只有 AstrBot 管理员或指定管理员可以开奖。")
+                return
+            async with self._lock:
+                self._remember_group(event)
+                result = self._draw_lottery()
+                self._save_state()
+            winner_lines = []
+            for winner in result["winners"][:10]:
+                reward = int(winner.get("stake") or 0) * int(result["multiplier"] or 1)
+                winner_lines.append(f"{winner.get('user_name') or winner.get('user_id')} 号码 {winner.get('number')} +{reward}")
+            if len(result["winners"]) > 10:
+                winner_lines.append(f"... 其余 {len(result['winners']) - 10} 位中奖者未展开")
+            lines = [
+                f"彩票第 {result['issue']} 期开奖完成",
+                f"开奖号码：{result['draw_number']}",
+                f"中奖人数：{result['winner_count']}",
+                f"发放总积分：{result['reward_total']}",
+            ]
+            if winner_lines:
+                lines.append("中奖名单：")
+                lines.extend(winner_lines)
+            else:
+                lines.append("本期无人中奖。")
+            await self._reply_and_stop(event, "\n".join(lines))
+            return
+
+        if action == "set":
+            if not (self._is_admin(event) or self._is_point_admin(event)):
+                await self._reply_and_stop(event, "只有 AstrBot 管理员或指定管理员可以指定开奖数字。")
+                return
+            async with self._lock:
+                self._remember_group(event)
+                if number is None:
+                    self._clear_lottery_forced_number()
+                    self._save_state()
+                    await self._reply_and_stop(event, "已清除后台指定号码，本期开奖将改为随机。")
+                    return
+                self._set_lottery_forced_number(number)
+                self._save_state()
+                await self._reply_and_stop(event, f"已设置本期开奖指定号码：{number}")
+            return
+
+        if action == "invalid" or number is None or stake is None:
+            await self._reply_and_stop(
+                event,
+                f"用法：彩票 <1-10> <积分>\n查看状态：彩票\n开奖：彩票 开奖\n指定号码：彩票 设奖 5\n清除指定：彩票 设奖 随机",
+            )
+            return
+
+        if not (1 <= number <= 10):
+            await self._reply_and_stop(event, "彩票号码只能是 1 到 10。")
+            return
+        if stake < self._lottery_min_bet() or stake > self._lottery_max_bet():
+            await self._reply_and_stop(event, f"彩票下注积分需要在 {self._lottery_min_bet()}~{self._lottery_max_bet()} 之间。")
+            return
+
+        async with self._lock:
+            if not self._begin_message_action(event, "lottery"):
+                return
+            self._remember_group(event)
+            self._remember_user(event)
+            group_sid = self._group_sid(event)
+            user_id = self._sender_id(event)
+            balance = self._balance(group_sid, user_id)
+            if balance < stake:
+                await self._reply_and_stop(event, f"积分不足。\n当前积分：{balance}\n本次需要：{stake}")
+                return
+            self._add_points(group_sid, user_id, -stake)
+            issue, user_bets = self._place_lottery_bet(event, number, stake)
+            new_balance = self._balance(group_sid, user_id)
+            self._save_state()
+
+        bet_desc = "，".join(f"{entry['number']}号 x {entry['stake']}" for entry in sorted(user_bets, key=lambda item: int(item["number"])))
+        await self._reply_and_stop(
+            event,
+            f"已下注成功，第 {issue} 期\n你的投注：{bet_desc}\n中奖倍率：{self._lottery_multiplier()} 倍\n当前积分：{new_balance}",
         )
     @filter.command("兑换商城", alias={"商店", "积分商城", "商品列表", "兑换列表"}, priority=100)
     async def shop(self, event: AstrMessageEvent):
@@ -265,6 +396,7 @@ class PointsShopPlugin(Star):
             return
 
         async with self._lock:
+            self._remember_group(event)
             self._remember_user(event)
             group_sid = self._group_sid(event)
             user_id = self._sender_id(event)
@@ -281,7 +413,7 @@ class PointsShopPlugin(Star):
             return
 
         try:
-            await asyncio.to_thread(self._render_shop_poster, items, stocks, balance, self._sender_name(event))
+            await _run_in_thread(self._render_shop_poster, items, stocks, balance, self._sender_name(event))
             chain = [
                 self._image_component(self.poster_path),
                 Comp.Plain(text=f"\n当前积分：{balance}\n发送 兑换 <商品ID或名称> [数量] 进行兑换。"),
@@ -420,6 +552,7 @@ class PointsShopPlugin(Star):
         user_id = self._sender_id(event)
         platform_id = event.get_platform_id()
         async with self._lock:
+            self._remember_group(event)
             records = [
                 item
                 for item in self.state.setdefault("exchange_records", [])
@@ -462,6 +595,7 @@ class PointsShopPlugin(Star):
             return
 
         async with self._lock:
+            self._remember_group(event)
             new_balance = self._add_points(self._group_sid(event), target_id, delta)
             self._save_state()
 
@@ -587,6 +721,97 @@ class PointsShopPlugin(Star):
             self._save_state()
 
         await self._reply_and_stop(event, f"已刷新签到，清除了 {cleared_users} 位用户今天的签到状态。")
+
+    @filter.command("通知设置", alias={"商城通知设置"}, priority=100)
+    async def notice_set(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_group_event(event):
+            await self._reply_and_stop(event, "通知设置需要在群聊里进行。")
+            return
+        if not (self._is_admin(event) or self._is_point_admin(event)):
+            await self._reply_and_stop(event, "只有 AstrBot 管理员或指定管理员可以设置通知。")
+            return
+        payload = self._command_payload(event, ("通知设置", "商城通知设置"))
+        parsed = self._parse_notice_command_payload(payload)
+        if parsed is None:
+            await self._reply_and_stop(event, "用法：通知设置 <间隔分钟> <内容>\n例如：通知设置 120 商城新奖品已上架")
+            return
+        interval_minutes, content = parsed
+        async with self._lock:
+            self._remember_group(event)
+            job = self._upsert_group_notice_job(event, interval_minutes, content, at_all=True, enabled=True)
+            self._save_state()
+        await self._reply_and_stop(event, f"已设置通知：每 {interval_minutes} 分钟发送一次，并 @全体。\n任务ID：{job['id']}")
+
+    @filter.command("通知关闭", alias={"商城通知关闭"}, priority=100)
+    async def notice_off(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_group_event(event):
+            await self._reply_and_stop(event, "通知关闭需要在群聊里进行。")
+            return
+        if not (self._is_admin(event) or self._is_point_admin(event)):
+            await self._reply_and_stop(event, "只有 AstrBot 管理员或指定管理员可以关闭通知。")
+            return
+        async with self._lock:
+            self._remember_group(event)
+            closed = self._disable_group_notice_jobs(self._group_sid(event))
+            self._save_state()
+        await self._reply_and_stop(event, "已关闭当前群通知。" if closed else "当前群还没有开启中的通知任务。")
+
+    @filter.command("通知状态", alias={"商城通知状态"}, priority=100)
+    async def notice_status(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_group_event(event):
+            await self._reply_and_stop(event, "通知状态需要在群聊里进行。")
+            return
+        async with self._lock:
+            self._remember_group(event)
+            group_sid = self._group_sid(event)
+            jobs = [job for job in self._notice_jobs() if group_sid in self._resolve_notice_target_sids(job)]
+        if not jobs:
+            await self._reply_and_stop(event, "当前群还没有通知任务。")
+            return
+        lines = ["当前群通知任务："]
+        for job in jobs:
+            lines.append(
+                f"{job.get('name')} [{job.get('id')}] - {'开启' if self._to_bool(job.get('enabled', False), False) else '关闭'}"
+                f" - 每 {job.get('interval_minutes')} 分钟 - 最近发送：{job.get('last_sent_at') or '未发送'}"
+            )
+            lines.append(f"内容：{job.get('content') or '-'}")
+        await self._reply_and_stop(event, "\n".join(lines))
+
+    @filter.command("通知发送", alias={"商城通知发送", "发送通知"}, priority=100)
+    async def notice_send_now(self, event: AstrMessageEvent):
+        if not self._enabled():
+            return
+        if not self._is_group_event(event):
+            await self._reply_and_stop(event, "通知发送需要在群聊里进行。")
+            return
+        if not (self._is_admin(event) or self._is_point_admin(event)):
+            await self._reply_and_stop(event, "只有 AstrBot 管理员或指定管理员可以立即发送通知。")
+            return
+        payload = self._command_payload(event, ("通知发送", "商城通知发送", "发送通知"))
+        content = str(payload or "").strip()
+        async with self._lock:
+            self._remember_group(event)
+            group_sid = self._group_sid(event)
+            job = next((item for item in self._notice_jobs() if group_sid in self._resolve_notice_target_sids(item)), None)
+            if job is None and not content:
+                await self._reply_and_stop(event, "当前群没有可发送的通知任务，请先设置通知内容。")
+                return
+            if job is None:
+                job = self._upsert_group_notice_job(event, 60, content, at_all=True, enabled=True)
+            elif content:
+                job["content"] = content
+                job["updated_at"] = self._now().strftime("%Y-%m-%d %H:%M:%S")
+            sent = await self._send_notice_job(job)
+            if sent:
+                job["last_sent_at"] = self._now().strftime("%Y-%m-%d %H:%M:%S")
+            self._save_state()
+        await self._reply_and_stop(event, "通知已发送。" if sent else "通知发送失败，请检查机器人发言权限。")
 
     @filter.command("奖励入库", alias={"入库奖励", "兑换入库"}, priority=100)
     async def reward_pool_add(self, event: AstrMessageEvent):
@@ -957,6 +1182,131 @@ class PointsShopPlugin(Star):
         action_text = "积分已覆盖" if mode == "set" else "积分已调整"
         return self._api_ok(data, f"{action_text}，当前积分：{next_value}")
 
+    async def api_admin_settings(self):
+        async with self._lock:
+            data = {
+                "rps": self._serialize_rps_settings(),
+                "lottery": self._serialize_lottery_settings(),
+                "notices": self._serialize_notice_settings(),
+            }
+        return self._api_ok(data)
+
+    async def api_admin_settings_save(self):
+        body = await self._request_json()
+        rps = body.get("rps") if isinstance(body.get("rps"), dict) else {}
+        lottery = body.get("lottery") if isinstance(body.get("lottery"), dict) else {}
+        def pick(payload: dict[str, Any], key: str, fallback: Any):
+            value = payload.get(key)
+            return fallback if value is None else value
+        async with self._lock:
+            settings = self._admin_settings()
+            if rps:
+                settings["rps_default_win_rate"] = self._percent(int(pick(rps, "default_win_rate", settings.get("rps_default_win_rate", 33))))
+                settings["rps_draw_rate"] = self._percent(int(pick(rps, "draw_rate", settings.get("rps_draw_rate", 33))))
+                settings["rps_segment_win_rates"] = str(pick(rps, "segments_text", settings.get("rps_segment_win_rates", "")) or "").strip()
+                settings["rps_segment_win_rates_custom"] = True
+            if lottery:
+                settings["lottery_min_bet"] = max(1, int(pick(lottery, "min_bet", settings.get("lottery_min_bet", self._min_bet()))))
+                settings["lottery_max_bet"] = max(settings["lottery_min_bet"], int(pick(lottery, "max_bet", settings.get("lottery_max_bet", self._max_bet()))))
+                settings["lottery_multiplier"] = max(2, int(pick(lottery, "multiplier", settings.get("lottery_multiplier", 8))))
+                if "forced_number" in lottery:
+                    forced = lottery.get("forced_number")
+                    if forced in {"", None, "random", "随机"}:
+                        self._clear_lottery_forced_number()
+                    else:
+                        self._set_lottery_forced_number(forced)
+            self.state["admin_settings"] = settings
+            self._save_state()
+            data = {
+                "rps": self._serialize_rps_settings(),
+                "lottery": self._serialize_lottery_settings(),
+                "notices": self._serialize_notice_settings(),
+            }
+        return self._api_ok(data, "玩法设置已保存。")
+
+    async def api_admin_lottery_draw(self):
+        async with self._lock:
+            result = self._draw_lottery()
+            self._save_state()
+        return self._api_ok(result, f"第 {result['issue']} 期开奖完成。")
+
+    async def api_admin_notice_save(self):
+        body = await self._request_json()
+        job_id = str(body.get("id") or "").strip()
+        content = str(body.get("content") or "").strip()
+        if not content:
+            return self._api_error("通知内容不能为空。")
+        try:
+            interval_minutes = max(1, int(body.get("interval_minutes") or 60))
+        except Exception:
+            return self._api_error("通知间隔格式不正确。")
+        async with self._lock:
+            jobs = self._notice_jobs()
+            target = self._find_notice_job(job_id) if job_id else None
+            now_text = self._now().strftime("%Y-%m-%d %H:%M:%S")
+            group_sids = self._normalize_group_sid_list(body.get("group_sids"))
+            if not group_sids:
+                return self._api_error("请至少选择一个通知群聊。")
+            if target is None:
+                target = {
+                    "id": self._new_notice_job_id(),
+                    "name": str(body.get("name") or f"通知 {len(jobs)+1}").strip() or f"通知 {len(jobs)+1}",
+                    "enabled": self._to_bool(body.get("enabled", True), True),
+                    "at_all": self._to_bool(body.get("at_all", False), False),
+                    "interval_minutes": interval_minutes,
+                    "content": content,
+                    "group_sids": group_sids,
+                    "last_sent_at": "",
+                    "updated_at": now_text,
+                }
+                jobs.append(target)
+            else:
+                target["name"] = str(body.get("name") or target.get("name") or "通知").strip() or "通知"
+                target["enabled"] = self._to_bool(body.get("enabled", True), True)
+                target["at_all"] = self._to_bool(body.get("at_all", False), False)
+                target["interval_minutes"] = interval_minutes
+                target["content"] = content
+                target["group_sids"] = group_sids
+                target["updated_at"] = now_text
+            self._save_state()
+            data = {
+                "job": self._serialize_notice_job(target),
+                "notices": self._serialize_notice_settings(),
+            }
+        return self._api_ok(data, "通知任务已保存。")
+
+    async def api_admin_notice_delete(self):
+        body = await self._request_json()
+        job_id = str(body.get("id") or "").strip()
+        if not job_id:
+            return self._api_error("缺少通知任务 ID。")
+        async with self._lock:
+            jobs = self._notice_jobs()
+            next_jobs = [job for job in jobs if str(job.get("id") or "") != job_id]
+            if len(next_jobs) == len(jobs):
+                return self._api_error("没有找到要删除的通知任务。", 404)
+            self.state["notice_jobs"] = next_jobs
+            self._save_state()
+            data = self._serialize_notice_settings()
+        return self._api_ok(data, "通知任务已删除。")
+
+    async def api_admin_notice_send(self):
+        body = await self._request_json()
+        job_id = str(body.get("id") or "").strip()
+        async with self._lock:
+            job = self._find_notice_job(job_id)
+            if job is None:
+                return self._api_error("没有找到通知任务。", 404)
+            sent = await self._send_notice_job(job)
+            if sent:
+                job["last_sent_at"] = self._now().strftime("%Y-%m-%d %H:%M:%S")
+                self._save_state()
+            data = {
+                "job": self._serialize_notice_job(job),
+                "sent": bool(sent),
+            }
+        return self._api_ok(data, "通知已发送。" if sent else "通知发送失败。")
+
     async def api_admin_codes(self):
         item_key = str(request.args.get("item_id", "") or "").strip()
         keyword = str(request.args.get("keyword", "") or "").strip().lower()
@@ -1113,6 +1463,12 @@ class PointsShopPlugin(Star):
             ("poster/preview", self.api_admin_poster_preview, ["GET"], "积分商城海报管理：生成海报预览"),
             ("balances", self.api_admin_balances, ["GET"], "积分商城积分管理：读取积分列表"),
             ("balances/update", self.api_admin_balances_update, ["POST"], "积分商城积分管理：调整积分"),
+            ("settings", self.api_admin_settings, ["GET"], "积分商城玩法设置：读取猜拳/彩票/通知设置"),
+            ("settings/save", self.api_admin_settings_save, ["POST"], "积分商城玩法设置：保存猜拳/彩票设置"),
+            ("lottery/draw", self.api_admin_lottery_draw, ["POST"], "积分商城彩票：立即开奖"),
+            ("notice/save", self.api_admin_notice_save, ["POST"], "积分商城通知：保存通知任务"),
+            ("notice/delete", self.api_admin_notice_delete, ["POST"], "积分商城通知：删除通知任务"),
+            ("notice/send", self.api_admin_notice_send, ["POST"], "积分商城通知：立即发送通知"),
             ("codes", self.api_admin_codes, ["GET"], "积分商城兑换码管理：查询兑换码"),
             ("codes/bulk-add", self.api_admin_codes_bulk_add, ["POST"], "积分商城兑换码管理：批量添加兑换码"),
             ("codes/delete", self.api_admin_codes_delete, ["POST"], "积分商城兑换码管理：删除兑换码"),
@@ -1216,11 +1572,100 @@ class PointsShopPlugin(Star):
             "created_at": str(entry.get("created_at") or ""),
         }
 
+    def _serialize_notice_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        group_sids = self._normalize_group_sid_list(job.get("group_sids"))
+        return {
+            "id": str(job.get("id") or ""),
+            "name": str(job.get("name") or ""),
+            "enabled": self._to_bool(job.get("enabled", False), False),
+            "at_all": self._to_bool(job.get("at_all", False), False),
+            "interval_minutes": max(1, int(job.get("interval_minutes") or 60)),
+            "content": str(job.get("content") or ""),
+            "group_sids": group_sids,
+            "group_labels": [self._group_label(group_sid) for group_sid in group_sids],
+            "last_sent_at": str(job.get("last_sent_at") or ""),
+            "updated_at": str(job.get("updated_at") or ""),
+        }
+
+    def _group_label(self, group_sid: str) -> str:
+        info = self._known_groups().get(str(group_sid or "").strip(), {})
+        group_name = str(info.get("group_name") or "").strip()
+        group_id = str(info.get("group_id") or "").strip()
+        return f"{group_name} [{group_id}]" if group_name and group_id else group_name or group_id or str(group_sid or "")
+
+    def _serialize_rps_settings(self) -> dict[str, Any]:
+        settings = self._admin_settings()
+        return {
+            "default_win_rate": self._rps_win_rate(),
+            "draw_rate": self._rps_draw_rate(),
+            "segments_text": str(settings.get("rps_segment_win_rates") or ""),
+            "segments": self._rps_segments(),
+            "min_bet": self._min_bet(),
+            "max_bet": self._max_bet(),
+        }
+
+    def _serialize_lottery_settings(self) -> dict[str, Any]:
+        lottery = self._lottery_state()
+        issue = self._lottery_issue()
+        bets = self._lottery_bets(issue)
+        return {
+            "issue": issue,
+            "min_bet": self._lottery_min_bet(),
+            "max_bet": self._lottery_max_bet(),
+            "multiplier": self._lottery_multiplier(),
+            "forced_number": self._lottery_current_forced_number(),
+            "last_draw_number": self._lottery_number_or_none(lottery.get("last_draw_number")),
+            "last_draw_time": str(lottery.get("last_draw_time") or ""),
+            "last_issue_closed": int(lottery.get("last_issue_closed") or 0),
+            "bets": bets,
+            "bet_count": len(bets),
+        }
+
+    def _serialize_notice_settings(self) -> dict[str, Any]:
+        jobs = [self._serialize_notice_job(job) for job in self._notice_jobs()]
+        groups_map: dict[str, dict[str, Any]] = {}
+        for group_sid, info in self._known_groups().items():
+            groups_map[group_sid] = {
+                "group_sid": group_sid,
+                "label": self._group_label(group_sid),
+                "platform_id": str(info.get("platform_id") or ""),
+                "group_id": str(info.get("group_id") or ""),
+                "group_name": str(info.get("group_name") or ""),
+            }
+        for job in jobs:
+            for group_sid in job.get("group_sids", []):
+                if group_sid in groups_map:
+                    continue
+                groups_map[group_sid] = {
+                    "group_sid": group_sid,
+                    "label": self._group_label(group_sid),
+                    "platform_id": "",
+                    "group_id": "",
+                    "group_name": "",
+                }
+        groups = [
+            {
+                "group_sid": str(item.get("group_sid") or ""),
+                "label": str(item.get("label") or ""),
+                "platform_id": str(item.get("platform_id") or ""),
+                "group_id": str(item.get("group_id") or ""),
+                "group_name": str(item.get("group_name") or ""),
+            }
+            for item in groups_map.values()
+        ]
+        groups.sort(key=lambda item: item["label"])
+        return {
+            "jobs": jobs,
+            "known_groups": groups,
+        }
+
     def _default_state(self) -> dict[str, Any]:
         return {
             "balances": {},
             "profiles": {},
             "point_admins": [],
+            "known_groups": {},
+            "admin_settings": {},
             "signins": {},
             "streaks": {},
             "stock": {},
@@ -1229,6 +1674,8 @@ class PointsShopPlugin(Star):
             "reward_pool": {},
             "exchange_records": [],
             "game_records": [],
+            "lottery": {},
+            "notice_jobs": [],
         }
     def _load_state(self) -> None:
         self.state = self._default_state()
@@ -1251,9 +1698,13 @@ class PointsShopPlugin(Star):
         self.state["point_admins"] = self._normalize_point_admins_state(
             self.state.get("point_admins", self.state.get("delegated_admins", self.state.get("admin_users")))
         )
+        self.state["known_groups"] = self._normalize_known_groups_state(self.state.get("known_groups"))
+        self.state["admin_settings"] = self._normalize_admin_settings_state(self.state.get("admin_settings"))
         self.state["items"] = self._normalize_items_state(self.state.get("items"))
         self.state["poster"] = self._normalize_poster_state(self.state.get("poster"))
         self.state["reward_pool"] = self._normalize_reward_pool_state(self.state.get("reward_pool"))
+        self.state["lottery"] = self._normalize_lottery_state(self.state.get("lottery"))
+        self.state["notice_jobs"] = self._normalize_notice_jobs_state(self.state.get("notice_jobs"))
 
     def _merge_balance_state(self, raw: Any) -> dict[str, int]:
         merged: dict[str, int] = {}
@@ -1359,6 +1810,132 @@ class PointsShopPlugin(Star):
             "background_path": self._normalize_icon_path(raw.get("background_path") or raw.get("bg_path") or ""),
             "updated_at": str(raw.get("updated_at") or "").strip(),
         }
+
+    def _normalize_known_groups_state(self, raw: Any) -> dict[str, dict[str, str]]:
+        groups: dict[str, dict[str, str]] = {}
+        if not isinstance(raw, dict):
+            return groups
+        for sid, info in raw.items():
+            group_sid = str(sid or "").strip()
+            if not group_sid:
+                continue
+            if isinstance(info, dict):
+                platform_id = str(info.get("platform_id") or "").strip()
+                group_id = str(info.get("group_id") or "").strip()
+                group_name = str(info.get("group_name") or "").strip()
+            else:
+                platform_id = ""
+                group_id = ""
+                group_name = ""
+            groups[group_sid] = {
+                "platform_id": platform_id,
+                "group_id": group_id,
+                "group_name": group_name,
+            }
+        return groups
+
+    def _normalize_lottery_state(self, raw: Any) -> dict[str, Any]:
+        data = raw if isinstance(raw, dict) else {}
+        result = {
+            "issue": max(1, int(data.get("issue") or 1)),
+            "forced_number": self._lottery_number_or_none(data.get("forced_number")),
+            "last_draw_number": self._lottery_number_or_none(data.get("last_draw_number")),
+            "last_draw_time": str(data.get("last_draw_time") or "").strip(),
+            "last_issue_closed": max(0, int(data.get("last_issue_closed") or 0)),
+            "bets": [],
+        }
+        bets_raw = data.get("bets")
+        if isinstance(bets_raw, list):
+            for bet in bets_raw:
+                normalized = self._normalize_lottery_bet(bet)
+                if normalized is not None:
+                    result["bets"].append(normalized)
+        return result
+
+    def _normalize_lottery_bet(self, raw: Any) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        user_id = str(raw.get("user_id") or "").strip()
+        issue = int(raw.get("issue") or 0)
+        number = self._lottery_number_or_none(raw.get("number"))
+        stake = max(1, int(raw.get("stake") or 0))
+        if not user_id or issue <= 0 or number is None:
+            return None
+        return {
+            "issue": issue,
+            "user_id": user_id,
+            "user_name": str(raw.get("user_name") or user_id).strip(),
+            "number": number,
+            "stake": stake,
+            "time": str(raw.get("time") or "").strip(),
+            "group_sid": str(raw.get("group_sid") or "").strip(),
+            "group_id": str(raw.get("group_id") or "").strip(),
+            "platform_id": str(raw.get("platform_id") or "").strip(),
+        }
+
+    def _normalize_notice_jobs_state(self, raw: Any) -> list[dict[str, Any]]:
+        jobs: list[dict[str, Any]] = []
+        if not isinstance(raw, list):
+            return jobs
+        seen: set[str] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            job_id = str(item.get("id") or "").strip() or uuid4().hex[:12]
+            if job_id in seen:
+                continue
+            seen.add(job_id)
+            interval_minutes = max(1, int(item.get("interval_minutes") or 60))
+            group_sids = self._normalize_group_sid_list(item.get("group_sids"))
+            jobs.append(
+                {
+                    "id": job_id,
+                    "name": str(item.get("name") or f"通知 {len(jobs)+1}").strip() or f"通知 {len(jobs)+1}",
+                    "enabled": self._to_bool(item.get("enabled", True), True),
+                    "at_all": self._to_bool(item.get("at_all", False), False),
+                    "interval_minutes": interval_minutes,
+                    "content": str(item.get("content") or "").strip(),
+                    "group_sids": group_sids,
+                    "last_sent_at": str(item.get("last_sent_at") or "").strip(),
+                    "updated_at": str(item.get("updated_at") or "").strip(),
+                }
+            )
+        return jobs
+
+    def _normalize_admin_settings_state(self, raw: Any) -> dict[str, Any]:
+        data = raw if isinstance(raw, dict) else {}
+        def pick(key: str, fallback: int) -> int:
+            value = data.get(key)
+            return fallback if value is None else int(value)
+        segment_custom = bool(data) and "rps_segment_win_rates" in data
+        if "rps_segment_win_rates" in data:
+            segment_text = str(data.get("rps_segment_win_rates") or "").strip()
+        else:
+            segment_text = str(self.config.get("rps_segment_win_rates") or "").strip()
+        return {
+            "rps_default_win_rate": self._percent(pick("rps_default_win_rate", self._cfg_int("rps_win_rate", 33))),
+            "rps_draw_rate": self._percent(pick("rps_draw_rate", self._cfg_int("rps_draw_rate", 33))),
+            "rps_segment_win_rates": segment_text,
+            "rps_segment_win_rates_custom": segment_custom,
+            "lottery_min_bet": max(1, pick("lottery_min_bet", self._cfg_int("lottery_min_bet", self._min_bet()))),
+            "lottery_max_bet": max(1, pick("lottery_max_bet", self._cfg_int("lottery_max_bet", self._max_bet()))),
+            "lottery_multiplier": max(2, pick("lottery_multiplier", self._cfg_int("lottery_multiplier", 8))),
+        }
+
+    def _normalize_group_sid_list(self, raw: Any) -> list[str]:
+        values: list[Any] = []
+        if isinstance(raw, (list, tuple, set)):
+            values = list(raw)
+        elif raw:
+            values = [raw]
+        group_sids: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            sid = str(value or "").strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                group_sids.append(sid)
+        return group_sids
     def _save_state(self) -> None:
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2039,7 +2616,17 @@ class PointsShopPlugin(Star):
         return move, bet
 
     def _choose_rps_bot_move(self, player_move: str) -> str:
-        win_rate = self._rps_win_rate()
+        win_rate = self._rps_win_rate_for_bet(0)
+        draw_rate = self._rps_draw_rate()
+        roll = random.uniform(0, 100)
+        if roll < win_rate:
+            return WIN_MAP[player_move]
+        if roll < win_rate + draw_rate:
+            return player_move
+        return LOSE_MAP[player_move]
+
+    def _choose_rps_bot_move_for_bet(self, player_move: str, bet: int) -> str:
+        win_rate = self._rps_win_rate_for_bet(bet)
         draw_rate = self._rps_draw_rate()
         roll = random.uniform(0, 100)
         if roll < win_rate:
@@ -2063,9 +2650,391 @@ class PointsShopPlugin(Star):
             key = " ".join(parts)
         return key.strip(), qty
 
+    def _parse_lottery_payload(self, payload: str) -> tuple[str, int | None, int | None]:
+        text = str(payload or "").strip()
+        if not text:
+            return "status", None, None
+        parts = [part for part in re.split(r"\s+", text) if part]
+        if not parts:
+            return "status", None, None
+        head = parts[0].lower()
+        if head in {"开奖", "结算", "draw", "settle"}:
+            return "draw", None, None
+        if head in {"设奖", "指定", "开奖结果", "set"}:
+            if len(parts) >= 2:
+                token = parts[1].strip().lower()
+                if token in {"随机", "清除", "clear", "random"}:
+                    return "set", None, None
+                return "set", self._lottery_number_or_none(parts[1]), None
+            return "set", None, None
+        if len(parts) >= 2 and re.fullmatch(r"\d+", parts[0]) and re.fullmatch(r"\d+", parts[1]):
+            return "bet", int(parts[0]), int(parts[1])
+        return "invalid", None, None
+
+    def _parse_notice_command_payload(self, payload: str) -> tuple[int, str] | None:
+        text = str(payload or "").strip()
+        if not text:
+            return None
+        match = re.match(r"^(\d+)\s+(.+)$", text, re.S)
+        if not match:
+            return None
+        interval_minutes = max(1, int(match.group(1)))
+        content = str(match.group(2) or "").strip()
+        if not content:
+            return None
+        return interval_minutes, content
+
     def _reward_mode(self, item: dict[str, Any]) -> str:
         mode = str(item.get("reward_mode") or "manual").strip().lower()
         return mode if mode in {"manual", "pool"} else "manual"
+
+    def _lottery_number_or_none(self, value: Any) -> int | None:
+        try:
+            number = int(value)
+        except Exception:
+            return None
+        return number if 1 <= number <= 10 else None
+
+    def _scheduler_tick_seconds(self) -> int:
+        return max(10, self._cfg_int("scheduler_tick_seconds", 20))
+
+    async def _scheduler_loop(self) -> None:
+        try:
+            while True:
+                try:
+                    async with self._lock:
+                        await self._run_notice_jobs_locked()
+                except Exception as exc:
+                    logger.warning(f"[PointsShop] scheduler loop failed: {exc}")
+                await asyncio.sleep(self._scheduler_tick_seconds())
+        except asyncio.CancelledError:
+            raise
+
+    async def _run_notice_jobs_locked(self) -> None:
+        jobs = self._notice_jobs()
+        if not jobs:
+            return
+        now = self._now()
+        changed = False
+        for job in jobs:
+            if not self._to_bool(job.get("enabled", False), False):
+                continue
+            interval_minutes = max(1, int(job.get("interval_minutes") or 60))
+            if not self._notice_job_due(job, now, interval_minutes):
+                continue
+            sent = await self._send_notice_job(job)
+            if sent:
+                job["last_sent_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+                job["updated_at"] = job["last_sent_at"]
+                changed = True
+        if changed:
+            self._save_state()
+
+    def _notice_job_due(self, job: dict[str, Any], now: datetime, interval_minutes: int) -> bool:
+        last_sent_at = str(job.get("last_sent_at") or "").strip()
+        if not last_sent_at:
+            return True
+        try:
+            last_dt = datetime.strptime(last_sent_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CHINA_TZ)
+        except Exception:
+            return True
+        return (now - last_dt).total_seconds() >= interval_minutes * 60
+
+    async def _send_notice_job(self, job: dict[str, Any]) -> bool:
+        group_sids = self._resolve_notice_target_sids(job)
+        if not group_sids:
+            return False
+        sent_any = False
+        for group_sid in group_sids:
+            try:
+                sent = await self.context.send_message(group_sid, self._build_notice_chain(job))
+                sent_any = bool(sent) or sent_any
+            except Exception as exc:
+                logger.warning(f"[PointsShop] send notice failed: {group_sid}, {exc}")
+        return sent_any
+
+    def _resolve_notice_target_sids(self, job: dict[str, Any]) -> list[str]:
+        configured = self._normalize_group_sid_list(job.get("group_sids"))
+        if configured:
+            return configured
+        return list(self._known_groups().keys())
+
+    def _build_notice_chain(self, job: dict[str, Any]) -> MessageChain:
+        content = str(job.get("content") or "").strip() or "积分商城通知"
+        chain = MessageChain()
+        if self._to_bool(job.get("at_all", False), False):
+            try:
+                chain.at_all()
+                chain.message(f"\n{content}")
+                return chain
+            except Exception:
+                pass
+        chain.message(content)
+        return chain
+
+    def _known_groups(self) -> dict[str, dict[str, str]]:
+        groups = self._normalize_known_groups_state(self.state.get("known_groups"))
+        self.state["known_groups"] = groups
+        return groups
+
+    def _admin_settings(self) -> dict[str, Any]:
+        settings = self._normalize_admin_settings_state(self.state.get("admin_settings"))
+        self.state["admin_settings"] = settings
+        return settings
+
+    def _remember_group(self, event: AstrMessageEvent) -> None:
+        if not self._is_group_event(event):
+            return
+        group_sid = self._group_sid(event)
+        if not group_sid:
+            return
+        group_name = ""
+        raw_message = getattr(event, "raw_message", None)
+        message_obj = getattr(event, "message_obj", None)
+        for carrier in (raw_message, message_obj):
+            if isinstance(carrier, dict):
+                group_name = str(carrier.get("group_name") or carrier.get("group", "") or "").strip()
+            elif carrier is not None:
+                group_name = str(getattr(carrier, "group_name", "") or getattr(carrier, "group", "") or "").strip()
+            if group_name:
+                break
+        self._known_groups()[group_sid] = {
+            "platform_id": event.get_platform_id(),
+            "group_id": self._group_id(event),
+            "group_name": group_name,
+        }
+
+    def _notice_jobs(self) -> list[dict[str, Any]]:
+        jobs = self._normalize_notice_jobs_state(self.state.get("notice_jobs"))
+        self.state["notice_jobs"] = jobs
+        return jobs
+
+    def _new_notice_job_id(self) -> str:
+        return uuid4().hex[:12]
+
+    def _find_notice_job(self, job_id: str) -> dict[str, Any] | None:
+        target = str(job_id or "").strip()
+        if not target:
+            return None
+        for job in self._notice_jobs():
+            if str(job.get("id") or "") == target:
+                return job
+        return None
+
+    def _upsert_group_notice_job(
+        self,
+        event: AstrMessageEvent,
+        interval_minutes: int,
+        content: str,
+        at_all: bool = True,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        group_sid = self._group_sid(event)
+        now_text = self._now().strftime("%Y-%m-%d %H:%M:%S")
+        jobs = self._notice_jobs()
+        for job in jobs:
+            if group_sid in self._resolve_notice_target_sids(job):
+                job["interval_minutes"] = max(1, int(interval_minutes or 1))
+                job["content"] = str(content or "").strip()
+                job["at_all"] = self._to_bool(at_all, True)
+                job["enabled"] = self._to_bool(enabled, True)
+                job["updated_at"] = now_text
+                if not str(job.get("name") or "").strip():
+                    job["name"] = f"群通知 {self._group_id(event) or group_sid}"
+                return job
+        job = {
+            "id": self._new_notice_job_id(),
+            "name": f"群通知 {self._group_id(event) or group_sid}",
+            "enabled": self._to_bool(enabled, True),
+            "at_all": self._to_bool(at_all, True),
+            "interval_minutes": max(1, int(interval_minutes or 1)),
+            "content": str(content or "").strip(),
+            "group_sids": [group_sid],
+            "last_sent_at": "",
+            "updated_at": now_text,
+        }
+        jobs.append(job)
+        return job
+
+    def _disable_group_notice_jobs(self, group_sid: str) -> bool:
+        target = str(group_sid or "").strip()
+        if not target:
+            return False
+        changed = False
+        now_text = self._now().strftime("%Y-%m-%d %H:%M:%S")
+        for job in self._notice_jobs():
+            if target not in self._resolve_notice_target_sids(job):
+                continue
+            if self._to_bool(job.get("enabled", False), False):
+                job["enabled"] = False
+                job["updated_at"] = now_text
+                changed = True
+        return changed
+
+    def _rps_segments(self) -> list[dict[str, int]]:
+        settings = self._admin_settings()
+        text = str(settings.get("rps_segment_win_rates") or "").strip()
+        segments: list[dict[str, int]] = []
+        if text:
+            for chunk in re.split(r"[,;\n]+", text):
+                piece = chunk.strip()
+                if not piece:
+                    continue
+                match = re.fullmatch(r"(\d+)\s*-\s*(\d+|\*)\s*[:=]\s*(\d+)", piece)
+                if not match:
+                    continue
+                min_bet = int(match.group(1))
+                max_token = match.group(2)
+                max_bet = -1 if max_token == "*" else int(max_token)
+                rate = self._percent(int(match.group(3)))
+                if max_bet >= 0 and max_bet < min_bet:
+                    max_bet = min_bet
+                segments.append({"min": min_bet, "max": max_bet, "win_rate": rate})
+        elif not self._to_bool(settings.get("rps_segment_win_rates_custom", False), False):
+            raw = self.config.get("rps_win_rate_segments")
+            if isinstance(raw, list):
+                for item in raw:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        min_value = item.get("min") if item.get("min") is not None else item.get("min_bet")
+                        min_bet = max(0, int(0 if min_value is None else min_value))
+                        max_value = item.get("max") if item.get("max") is not None else item.get("max_bet")
+                        max_bet = int(max_value) if max_value not in {None, ""} else -1
+                        rate_value = item.get("win_rate")
+                        if rate_value is None:
+                            rate_value = item.get("rate")
+                        if rate_value is None:
+                            rate_value = item.get("value")
+                        rate = self._percent(int(0 if rate_value is None else rate_value))
+                    except Exception:
+                        continue
+                    if max_bet >= 0 and max_bet < min_bet:
+                        max_bet = min_bet
+                    segments.append({"min": min_bet, "max": max_bet, "win_rate": rate})
+
+        segments.sort(key=lambda item: (item["min"], item["max"]))
+        normalized: list[dict[str, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for item in segments:
+            key = (item["min"], item["max"])
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(item)
+        return normalized
+
+    def _rps_win_rate_for_bet(self, bet: int) -> int:
+        for segment in self._rps_segments():
+            min_bet = int(segment.get("min") or 0)
+            max_bet = int(segment.get("max") or -1)
+            if bet < min_bet:
+                continue
+            if max_bet >= 0 and bet > max_bet:
+                continue
+            return self._percent(int(segment.get("win_rate") or 0))
+        return self._rps_win_rate()
+
+    def _lottery_state(self) -> dict[str, Any]:
+        raw = self.state.get("lottery")
+        lottery = self._normalize_lottery_state(raw)
+        if isinstance(raw, dict):
+            raw.clear()
+            raw.update(lottery)
+            self.state["lottery"] = raw
+            return raw
+        self.state["lottery"] = lottery
+        return lottery
+
+    def _lottery_issue(self) -> int:
+        return max(1, int(self._lottery_state().get("issue") or 1))
+
+    def _lottery_bets(self, issue: int | None = None) -> list[dict[str, Any]]:
+        state = self._lottery_state()
+        bets = list(state.get("bets") or [])
+        if issue is None:
+            return bets
+        return [bet for bet in bets if int(bet.get("issue") or 0) == int(issue)]
+
+    def _lottery_multiplier(self) -> int:
+        return max(2, int(self._admin_settings().get("lottery_multiplier") or 8))
+
+    def _lottery_min_bet(self) -> int:
+        return max(1, int(self._admin_settings().get("lottery_min_bet") or self._min_bet()))
+
+    def _lottery_max_bet(self) -> int:
+        return max(self._lottery_min_bet(), int(self._admin_settings().get("lottery_max_bet") or self._max_bet()))
+
+    def _lottery_current_forced_number(self) -> int | None:
+        return self._lottery_number_or_none(self._lottery_state().get("forced_number"))
+
+    def _set_lottery_forced_number(self, value: Any) -> int | None:
+        number = self._lottery_number_or_none(value)
+        self._lottery_state()["forced_number"] = number
+        return number
+
+    def _clear_lottery_forced_number(self) -> None:
+        self._lottery_state()["forced_number"] = None
+
+    def _place_lottery_bet(self, event: AstrMessageEvent, number: int, stake: int) -> tuple[int, list[dict[str, Any]]]:
+        lottery = self._lottery_state()
+        issue = self._lottery_issue()
+        all_bets = list(lottery.get("bets", []) or [])
+        current_user_id = self._sender_id(event)
+        current_issue_bets = [bet for bet in all_bets if int(bet.get("issue") or 0) == issue]
+        user_bets = [bet for bet in current_issue_bets if str(bet.get("user_id") or "") == current_user_id]
+        total_stake = sum(int(bet.get("stake") or 0) for bet in user_bets if int(bet.get("number") or 0) == number)
+        entry = {
+            "issue": issue,
+            "user_id": current_user_id,
+            "user_name": self._sender_name(event),
+            "number": number,
+            "stake": stake + total_stake,
+            "time": self._now().strftime("%Y-%m-%d %H:%M:%S"),
+            "group_sid": self._group_sid(event),
+            "group_id": self._group_id(event),
+            "platform_id": event.get_platform_id(),
+        }
+        bets = [bet for bet in all_bets if int(bet.get("issue") or 0) != issue]
+        for bet in current_issue_bets:
+            if str(bet.get("user_id") or "") != current_user_id:
+                bets.append(bet)
+                continue
+            if int(bet.get("number") or 0) != number:
+                bets.append(bet)
+        bets.append(entry)
+        lottery["bets"] = bets
+        return issue, [bet for bet in bets if int(bet.get("issue") or 0) == issue and str(bet.get("user_id") or "") == current_user_id]
+
+    def _draw_lottery(self) -> dict[str, Any]:
+        lottery = self._lottery_state()
+        issue = self._lottery_issue()
+        draw_number = self._lottery_current_forced_number()
+        if draw_number is None:
+            draw_number = random.randint(1, 10)
+        bets = self._lottery_bets(issue)
+        winners = [bet for bet in bets if int(bet.get("number") or 0) == draw_number]
+        multiplier = self._lottery_multiplier()
+        reward_total = 0
+        for bet in winners:
+            reward = int(bet.get("stake") or 0) * multiplier
+            reward_total += reward
+            self._add_points(str(bet.get("group_sid") or ""), str(bet.get("user_id") or ""), reward)
+        lottery["last_draw_number"] = draw_number
+        lottery["last_draw_time"] = self._now().strftime("%Y-%m-%d %H:%M:%S")
+        lottery["last_issue_closed"] = issue
+        lottery["issue"] = issue + 1
+        lottery["forced_number"] = None
+        lottery["bets"] = [bet for bet in lottery.get("bets", []) if int(bet.get("issue") or 0) != issue]
+        return {
+            "issue": issue,
+            "draw_number": draw_number,
+            "winners": winners,
+            "winner_count": len(winners),
+            "reward_total": reward_total,
+            "multiplier": multiplier,
+            "total_bets": len(bets),
+        }
 
     def _reward_pool(self, item_id: str) -> list[dict[str, Any]]:
         reward_pool = self.state.setdefault("reward_pool", {})
@@ -2493,7 +3462,10 @@ class PointsShopPlugin(Star):
             "签到 - 每日签到领取积分（所有群聊共享积分）\n"
             "积分 - 查看当前积分余额\n"
             "积分排行 - 查看全局积分排行榜\n"
-            f"猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，当前胜率 {self._rps_win_rate()}%\n"
+            f"猜拳 <石头|剪刀|布> <积分> - 下注猜拳，范围 {self._min_bet()}~{self._max_bet()}，默认胜率 {self._rps_win_rate()}%\n"
+            f"彩票 <1-10> <积分> - 下注彩票，范围 {self._lottery_min_bet()}~{self._lottery_max_bet()}，中奖 {self._lottery_multiplier()} 倍\n"
+            "彩票 开奖 - 管理员立即结算当期彩票\n"
+            "彩票 设奖 <1-10|随机> - 管理员指定或清除本期开奖数字\n"
             "商店 - 查看精美商品图\n"
             "兑换 <商品ID或名称> [数量] - 消耗积分兑换\n"
             "兑换记录 - 查看最近订单\n"
@@ -2503,6 +3475,8 @@ class PointsShopPlugin(Star):
             "管理员权限列表 - 仅 AstrBot 管理员，查看当前指定管理员\n"
             "清空其他人积分 - 仅 AstrBot 管理员，一键清空除自己外所有人的积分\n"
             "刷新签到 - 仅 AstrBot 管理员，清除所有人今天的签到状态\n"
+            "通知设置 <间隔分钟> <内容> - 管理员设置当前群定时通知并 @全体\n"
+            "通知状态 / 通知发送 / 通知关闭 - 查看、立即发送或关闭当前群通知\n"
             "奖励入库 <商品ID> <兑换码> [| 备注] - 管理员手动补充兑换码\n"
             "奖励仓库 [商品ID] - 管理员查看兑换码仓库\n"
             "推荐在插件页面 code_manager 中批量维护兑换码。\n"
@@ -2551,6 +3525,8 @@ class PointsShopPlugin(Star):
             "积分排行": self.leaderboard,
             "排行榜": self.leaderboard,
             "积分榜": self.leaderboard,
+            "彩票": self.lottery,
+            "积分彩票": self.lottery,
             "商店": self.shop,
             "兑换商城": self.shop,
             "积分商城": self.shop,
@@ -2572,6 +3548,10 @@ class PointsShopPlugin(Star):
             "重置签到": self.refresh_signins,
             "清空今日签到": self.refresh_signins,
             "重置今日签到": self.refresh_signins,
+            "通知状态": self.notice_status,
+            "商城通知状态": self.notice_status,
+            "通知关闭": self.notice_off,
+            "商城通知关闭": self.notice_off,
             "奖励仓库": self.reward_pool_list,
             "兑换仓库": self.reward_pool_list,
             "奖励列表": self.reward_pool_list,
@@ -2584,6 +3564,13 @@ class PointsShopPlugin(Star):
             ("剪刀石头布", self.rps),
             ("石头剪刀布", self.rps),
             ("划拳", self.rps),
+            ("彩票", self.lottery),
+            ("积分彩票", self.lottery),
+            ("通知设置", self.notice_set),
+            ("商城通知设置", self.notice_set),
+            ("通知发送", self.notice_send_now),
+            ("商城通知发送", self.notice_send_now),
+            ("发送通知", self.notice_send_now),
             ("兑换", self.exchange),
             ("购买", self.exchange),
             ("积分兑换", self.exchange),
@@ -2776,10 +3763,17 @@ class PointsShopPlugin(Star):
         return max(self._min_bet(), self._cfg_int("max_bet", 100))
 
     def _rps_win_rate(self) -> int:
-        return self._percent(self._cfg_int("rps_win_rate", 33))
+        value = self._admin_settings().get("rps_default_win_rate")
+        if value is None:
+            value = self._cfg_int("rps_win_rate", 33)
+        return self._percent(int(value))
 
     def _rps_draw_rate(self) -> int:
-        return min(self._percent(self._cfg_int("rps_draw_rate", 33)), max(0, 100 - self._rps_win_rate()))
+        draw_rate_value = self._admin_settings().get("rps_draw_rate")
+        if draw_rate_value is None:
+            draw_rate_value = self._cfg_int("rps_draw_rate", 33)
+        draw_rate = self._percent(int(draw_rate_value))
+        return min(draw_rate, max(0, 100 - self._rps_win_rate()))
 
     def _percent(self, value: int) -> int:
         return max(0, min(100, int(value)))

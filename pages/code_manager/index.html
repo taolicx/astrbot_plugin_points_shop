@@ -683,6 +683,117 @@
               <div class="hint" id="addSummary">准备就绪。</div>
             </div>
           </div>
+
+          <div class="panel">
+            <div class="section-title">
+              <div>
+                <h2>玩法与通知</h2>
+                <p>集中设置剪刀石头布分段胜率、彩票倍率/指定开奖，以及周期性全体通知。</p>
+              </div>
+              <div class="actions">
+                <button class="primary" id="saveGameSettingsBtn" type="button">保存玩法设置</button>
+                <button class="ghost" id="refreshGameSettingsBtn" type="button">刷新</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <div class="field-grid">
+                <div class="field">
+                  <label for="rpsDefaultWinRateInput">猜拳默认胜率 (%)</label>
+                  <input id="rpsDefaultWinRateInput" type="number" min="0" max="100" step="1" />
+                </div>
+                <div class="field">
+                  <label for="rpsDrawRateInput">猜拳平局率 (%)</label>
+                  <input id="rpsDrawRateInput" type="number" min="0" max="100" step="1" />
+                </div>
+                <div class="field span-2">
+                  <label for="rpsSegmentsInput">分段胜率</label>
+                  <textarea id="rpsSegmentsInput" placeholder="示例：5-5:60&#10;10-10:45&#10;11-50:35&#10;51-*:20"></textarea>
+                </div>
+              </div>
+
+              <div class="field-grid">
+                <div class="field">
+                  <label for="lotteryMinBetInput">彩票最小下注</label>
+                  <input id="lotteryMinBetInput" type="number" min="1" step="1" />
+                </div>
+                <div class="field">
+                  <label for="lotteryMaxBetInput">彩票最大下注</label>
+                  <input id="lotteryMaxBetInput" type="number" min="1" step="1" />
+                </div>
+                <div class="field">
+                  <label for="lotteryMultiplierInput">彩票中奖倍率</label>
+                  <input id="lotteryMultiplierInput" type="number" min="2" step="1" />
+                </div>
+                <div class="field">
+                  <label for="lotteryForcedNumberInput">指定开奖号码</label>
+                  <input id="lotteryForcedNumberInput" type="number" min="1" max="10" step="1" placeholder="留空为随机开奖" />
+                </div>
+              </div>
+
+              <div class="actions">
+                <button class="secondary" id="drawLotteryBtn" type="button">立即开奖</button>
+                <div class="hint" id="lotteryMeta">当前期号：-</div>
+              </div>
+
+              <div class="field-grid">
+                <div class="field">
+                  <label for="noticeNameInput">通知名称</label>
+                  <input id="noticeNameInput" type="text" placeholder="例如 晚间商城提醒" />
+                </div>
+                <div class="field">
+                  <label for="noticeIntervalInput">通知间隔（分钟）</label>
+                  <input id="noticeIntervalInput" type="number" min="1" step="1" />
+                </div>
+                <div class="field span-2">
+                  <label for="noticeGroupSelect">通知群聊</label>
+                  <select id="noticeGroupSelect" multiple size="5"></select>
+                </div>
+                <div class="field span-2">
+                  <label for="noticeContentInput">通知内容</label>
+                  <textarea id="noticeContentInput" placeholder="例如：@全体成员 今日商城已补货，欢迎查看。"></textarea>
+                </div>
+                <div class="field">
+                  <label>通知状态</label>
+                  <label class="toggle">
+                    <input id="noticeEnabledInput" type="checkbox" checked />
+                    <span>启用任务</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <label>艾特全体</label>
+                  <label class="toggle">
+                    <input id="noticeAtAllInput" type="checkbox" checked />
+                    <span>发送时 @全体</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="actions">
+                <button class="ghost" id="newNoticeBtn" type="button">新建通知</button>
+                <button class="primary" id="saveNoticeBtn" type="button">保存通知</button>
+                <button class="secondary" id="sendNoticeBtn" type="button">立即发送</button>
+                <button class="danger" id="deleteNoticeBtn" type="button">删除通知</button>
+              </div>
+
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width: 18%;">名称</th>
+                      <th style="width: 14%;">状态</th>
+                      <th style="width: 18%;">间隔</th>
+                      <th style="width: 24%;">目标群</th>
+                      <th style="width: 26%;">最近发送</th>
+                    </tr>
+                  </thead>
+                  <tbody id="noticeBody">
+                    <tr><td colspan="5" class="empty">正在加载通知任务</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section class="stack">
@@ -926,6 +1037,8 @@
       balances: [],
       balanceSummary: { users: 0, points: 0 },
       poster: null,
+      settings: null,
+      selectedNoticeId: "",
       isNewItem: false,
     };
     let confirmResolver = null;
@@ -943,6 +1056,28 @@
       itemSearchInput: document.getElementById("itemSearchInput"),
       itemList: document.getElementById("itemList"),
       poolItemSelect: document.getElementById("poolItemSelect"),
+      saveGameSettingsBtn: document.getElementById("saveGameSettingsBtn"),
+      refreshGameSettingsBtn: document.getElementById("refreshGameSettingsBtn"),
+      rpsDefaultWinRateInput: document.getElementById("rpsDefaultWinRateInput"),
+      rpsDrawRateInput: document.getElementById("rpsDrawRateInput"),
+      rpsSegmentsInput: document.getElementById("rpsSegmentsInput"),
+      lotteryMinBetInput: document.getElementById("lotteryMinBetInput"),
+      lotteryMaxBetInput: document.getElementById("lotteryMaxBetInput"),
+      lotteryMultiplierInput: document.getElementById("lotteryMultiplierInput"),
+      lotteryForcedNumberInput: document.getElementById("lotteryForcedNumberInput"),
+      drawLotteryBtn: document.getElementById("drawLotteryBtn"),
+      lotteryMeta: document.getElementById("lotteryMeta"),
+      noticeNameInput: document.getElementById("noticeNameInput"),
+      noticeIntervalInput: document.getElementById("noticeIntervalInput"),
+      noticeGroupSelect: document.getElementById("noticeGroupSelect"),
+      noticeContentInput: document.getElementById("noticeContentInput"),
+      noticeEnabledInput: document.getElementById("noticeEnabledInput"),
+      noticeAtAllInput: document.getElementById("noticeAtAllInput"),
+      newNoticeBtn: document.getElementById("newNoticeBtn"),
+      saveNoticeBtn: document.getElementById("saveNoticeBtn"),
+      sendNoticeBtn: document.getElementById("sendNoticeBtn"),
+      deleteNoticeBtn: document.getElementById("deleteNoticeBtn"),
+      noticeBody: document.getElementById("noticeBody"),
       newItemBtn: document.getElementById("newItemBtn"),
       refreshItemsBtn: document.getElementById("refreshItemsBtn"),
       saveItemBtn: document.getElementById("saveItemBtn"),
@@ -1382,6 +1517,102 @@
       `).join("");
     }
 
+    function currentNotice() {
+      return state.settings?.notices?.jobs?.find((job) => job.id === state.selectedNoticeId) || null;
+    }
+
+    function renderNoticeGroups() {
+      const groups = state.settings?.notices?.known_groups || [];
+      if (!groups.length) {
+        elements.noticeGroupSelect.innerHTML = `<option value="">暂无已记录群聊</option>`;
+        return;
+      }
+      elements.noticeGroupSelect.innerHTML = groups
+        .map((group) => `<option value="${escapeHtml(group.group_sid)}">${escapeHtml(group.label || group.group_sid)}</option>`)
+        .join("");
+    }
+
+    function renderNoticeTable() {
+      const jobs = state.settings?.notices?.jobs || [];
+      if (!jobs.length) {
+        elements.noticeBody.innerHTML = `<tr><td colspan="5" class="empty">还没有通知任务</td></tr>`;
+        return;
+      }
+      elements.noticeBody.innerHTML = jobs.map((job) => `
+        <tr data-notice-row="${escapeHtml(job.id)}" style="${job.id === state.selectedNoticeId ? "background:#eef5ff;" : ""}">
+          <td>${escapeHtml(job.name || "-")}</td>
+          <td>${job.enabled ? "开启" : "关闭"}${job.at_all ? " / @全体" : ""}</td>
+          <td>每 ${escapeHtml(String(job.interval_minutes || 60))} 分钟</td>
+          <td>${escapeHtml((job.group_labels || []).join("；") || "-")}</td>
+          <td>${escapeHtml(formatDate(job.last_sent_at))}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderNoticeEditor() {
+      const notice = currentNotice();
+      if (!notice) {
+        elements.noticeNameInput.value = "";
+        elements.noticeIntervalInput.value = "60";
+        elements.noticeContentInput.value = "";
+        elements.noticeEnabledInput.checked = true;
+        elements.noticeAtAllInput.checked = true;
+        Array.from(elements.noticeGroupSelect.options).forEach((option) => {
+          option.selected = false;
+        });
+        if (elements.noticeGroupSelect.options.length) {
+          elements.noticeGroupSelect.options[0].selected = true;
+        }
+        elements.deleteNoticeBtn.disabled = true;
+        elements.sendNoticeBtn.disabled = true;
+        return;
+      }
+      elements.noticeNameInput.value = notice.name || "";
+      elements.noticeIntervalInput.value = String(notice.interval_minutes ?? 60);
+      elements.noticeContentInput.value = notice.content || "";
+      elements.noticeEnabledInput.checked = notice.enabled !== false;
+      elements.noticeAtAllInput.checked = notice.at_all !== false;
+      const selected = new Set(notice.group_sids || []);
+      Array.from(elements.noticeGroupSelect.options).forEach((option) => {
+        option.selected = selected.has(option.value);
+      });
+      elements.deleteNoticeBtn.disabled = false;
+      elements.sendNoticeBtn.disabled = false;
+    }
+
+    function renderGameSettings() {
+      const settings = state.settings || {};
+      const rps = settings.rps || {};
+      const lottery = settings.lottery || {};
+      const notices = settings.notices || {};
+
+      elements.rpsDefaultWinRateInput.value = String(rps.default_win_rate ?? 33);
+      elements.rpsDrawRateInput.value = String(rps.draw_rate ?? 33);
+      elements.rpsSegmentsInput.value = rps.segments_text || "";
+      elements.lotteryMinBetInput.value = String(lottery.min_bet ?? 1);
+      elements.lotteryMaxBetInput.value = String(lottery.max_bet ?? 100);
+      elements.lotteryMultiplierInput.value = String(lottery.multiplier ?? 8);
+      elements.lotteryForcedNumberInput.value = lottery.forced_number ?? "";
+      elements.lotteryMeta.textContent = `当前期号：${lottery.issue ?? "-"}，本期下注：${lottery.bet_count ?? 0}，上期开奖：${lottery.last_draw_number ?? "-"}`;
+
+      if (!state.selectedNoticeId && notices.jobs?.length) {
+        state.selectedNoticeId = notices.jobs[0].id;
+      }
+      if (state.selectedNoticeId && !(notices.jobs || []).some((job) => job.id === state.selectedNoticeId)) {
+        state.selectedNoticeId = notices.jobs?.[0]?.id || "";
+      }
+
+      renderNoticeGroups();
+      renderNoticeTable();
+      renderNoticeEditor();
+    }
+
+    function resetNoticeEditor() {
+      state.selectedNoticeId = "";
+      renderNoticeTable();
+      renderNoticeEditor();
+    }
+
     function resetEditorToNew() {
       state.isNewItem = true;
       state.selectedItemId = "";
@@ -1478,9 +1709,15 @@
       renderSummary();
     }
 
+    async function loadSettings() {
+      const payload = await apiGet("settings");
+      state.settings = payload.data || {};
+      renderGameSettings();
+    }
+
     async function refreshAll(message) {
       hideStatus();
-      await Promise.all([loadItems(true), loadPoster(), loadBalances()]);
+      await Promise.all([loadItems(true), loadPoster(), loadBalances(), loadSettings()]);
       await loadCodes();
       renderSummary();
       if (message) {
@@ -1728,6 +1965,128 @@
       }
     }
 
+    function selectedNoticeGroupSids() {
+      return Array.from(elements.noticeGroupSelect.selectedOptions || []).map((option) => option.value).filter(Boolean);
+    }
+
+    async function handleSaveGameSettings() {
+      elements.saveGameSettingsBtn.disabled = true;
+      try {
+        const payload = await apiPost("settings/save", {
+          rps: {
+            default_win_rate: Number(elements.rpsDefaultWinRateInput.value || 0),
+            draw_rate: Number(elements.rpsDrawRateInput.value || 0),
+            segments_text: elements.rpsSegmentsInput.value.trim(),
+          },
+          lottery: {
+            min_bet: Number(elements.lotteryMinBetInput.value || 1),
+            max_bet: Number(elements.lotteryMaxBetInput.value || 1),
+            multiplier: Number(elements.lotteryMultiplierInput.value || 2),
+            forced_number: elements.lotteryForcedNumberInput.value.trim(),
+          },
+        });
+        state.settings = payload.data || state.settings;
+        renderGameSettings();
+        showStatus(payload.message || "玩法设置已保存。", "info");
+      } catch (error) {
+        showStatus(error.message || "保存玩法设置失败。", "error");
+      } finally {
+        elements.saveGameSettingsBtn.disabled = false;
+      }
+    }
+
+    async function handleDrawLottery() {
+      const confirmed = await askConfirm("确认立即执行彩票开奖吗？本期将直接结算并进入下一期。");
+      if (!confirmed) {
+        return;
+      }
+      elements.drawLotteryBtn.disabled = true;
+      try {
+        const payload = await apiPost("lottery/draw", {});
+        await loadSettings();
+        showStatus(payload.message || `第 ${payload.data?.issue || "-"} 期开奖完成。`, "info");
+      } catch (error) {
+        showStatus(error.message || "开奖失败。", "error");
+      } finally {
+        elements.drawLotteryBtn.disabled = false;
+      }
+    }
+
+    async function handleSaveNotice() {
+      const content = elements.noticeContentInput.value.trim();
+      if (!content) {
+        showStatus("请填写通知内容。", "error");
+        return;
+      }
+      const groupSids = selectedNoticeGroupSids();
+      if (!groupSids.length) {
+        showStatus("请至少选择一个通知群聊。", "error");
+        return;
+      }
+      elements.saveNoticeBtn.disabled = true;
+      try {
+        const payload = await apiPost("notice/save", {
+          id: state.selectedNoticeId,
+          name: elements.noticeNameInput.value.trim(),
+          interval_minutes: Number(elements.noticeIntervalInput.value || 60),
+          content,
+          group_sids: groupSids,
+          enabled: elements.noticeEnabledInput.checked,
+          at_all: elements.noticeAtAllInput.checked,
+        });
+        state.settings = {
+          ...(state.settings || {}),
+          notices: payload.data?.notices || state.settings?.notices || {},
+        };
+        state.selectedNoticeId = payload.data?.job?.id || state.selectedNoticeId;
+        renderGameSettings();
+        showStatus(payload.message || "通知任务已保存。", "info");
+      } catch (error) {
+        showStatus(error.message || "保存通知失败。", "error");
+      } finally {
+        elements.saveNoticeBtn.disabled = false;
+      }
+    }
+
+    async function handleDeleteNotice() {
+      const notice = currentNotice();
+      if (!notice) {
+        showStatus("请先选择一个通知任务。", "error");
+        return;
+      }
+      const confirmed = await askConfirm(`确认删除通知任务“${notice.name}”吗？`);
+      if (!confirmed) {
+        return;
+      }
+      try {
+        const payload = await apiPost("notice/delete", { id: notice.id });
+        state.settings = { ...(state.settings || {}), notices: payload.data || {} };
+        state.selectedNoticeId = state.settings?.notices?.jobs?.[0]?.id || "";
+        renderGameSettings();
+        showStatus(payload.message || "通知任务已删除。", "info");
+      } catch (error) {
+        showStatus(error.message || "删除通知失败。", "error");
+      }
+    }
+
+    async function handleSendNotice() {
+      const notice = currentNotice();
+      if (!notice) {
+        showStatus("请先选择一个通知任务。", "error");
+        return;
+      }
+      elements.sendNoticeBtn.disabled = true;
+      try {
+        const payload = await apiPost("notice/send", { id: notice.id });
+        await loadSettings();
+        showStatus(payload.message || "通知已发送。", "info");
+      } catch (error) {
+        showStatus(error.message || "发送通知失败。", "error");
+      } finally {
+        elements.sendNoticeBtn.disabled = false;
+      }
+    }
+
     async function bootstrap() {
       try {
         if (window.AstrBotPluginPage?.ready) {
@@ -1785,6 +2144,36 @@
     });
 
     elements.addCodesBtn.addEventListener("click", handleAddCodes);
+
+    elements.saveGameSettingsBtn.addEventListener("click", handleSaveGameSettings);
+    elements.refreshGameSettingsBtn.addEventListener("click", async () => {
+      try {
+        await loadSettings();
+        showStatus("玩法设置已刷新。", "info");
+      } catch (error) {
+        showStatus(error.message || "刷新玩法设置失败。", "error");
+      }
+    });
+    elements.drawLotteryBtn.addEventListener("click", handleDrawLottery);
+    elements.newNoticeBtn.addEventListener("click", () => {
+      resetNoticeEditor();
+      hideStatus();
+    });
+    elements.saveNoticeBtn.addEventListener("click", handleSaveNotice);
+    elements.deleteNoticeBtn.addEventListener("click", handleDeleteNotice);
+    elements.sendNoticeBtn.addEventListener("click", handleSendNotice);
+    elements.noticeBody.addEventListener("click", (event) => {
+      const row = event.target.closest("[data-notice-row]");
+      if (!row) {
+        return;
+      }
+      state.selectedNoticeId = row.getAttribute("data-notice-row") || "";
+      renderNoticeTable();
+      renderNoticeEditor();
+    });
+    elements.noticeBody.addEventListener("dblclick", () => {
+      resetNoticeEditor();
+    });
 
     elements.resetInputBtn.addEventListener("click", () => {
       elements.codesInput.value = "";
