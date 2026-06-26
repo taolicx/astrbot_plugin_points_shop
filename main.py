@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.25"
+PLUGIN_VERSION = "0.1.27"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
