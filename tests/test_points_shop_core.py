@@ -257,10 +257,44 @@ class PointsShopCoreTests(unittest.TestCase):
         self.assertEqual(result["draw_number"], 5)
         self.assertEqual(result["winner_count"], 1)
         self.assertEqual(result["reward_total"], 80)
+        self.assertEqual(result["participant_count"], 1)
         self.assertEqual(plugin._balance("qq:GroupMessage:100", "u1"), 80)
         self.assertEqual(plugin._lottery_issue(), 2)
         self.assertIsNone(plugin._lottery_current_forced_number())
         self.assertEqual(plugin._lottery_bets(1), [])
+        last_result = plugin._lottery_last_result()
+        self.assertIsNotNone(last_result)
+        assert last_result is not None
+        self.assertEqual(last_result["draw_number"], 5)
+        self.assertEqual(last_result["winner_count"], 1)
+        self.assertEqual(last_result["reward_total"], 80)
+        self.assertEqual(last_result["participant_count"], 1)
+
+    def test_lottery_status_shows_last_result_and_hides_forced_hint(self):
+        plugin = self.make_plugin()
+        plugin.state["admin_settings"] = plugin._normalize_admin_settings_state(
+            {"lottery_min_bet": 1, "lottery_max_bet": 100, "lottery_multiplier": 8}
+        )
+
+        bet_event = DummyEvent(user_id="u1", user_name="张三", group_id="100")
+        plugin._place_lottery_bet(bet_event, 5, 10)
+        plugin._set_lottery_forced_number(5)
+        plugin._draw_lottery()
+        plugin._set_lottery_forced_number(7)
+
+        status_event = DummyEvent(user_id="u2", user_name="李四", group_id="200")
+        status_event.message_str = "选号"
+        asyncio.run(plugin.lottery(status_event))
+
+        self.assertTrue(status_event.stopped)
+        self.assertTrue(status_event.sent_results)
+        reply = status_event.sent_results[-1]
+        self.assertIn("上次结果号码：5", reply)
+        self.assertIn("上次参与人数：1", reply)
+        self.assertIn("上次命中人数：1", reply)
+        self.assertIn("上次发放积分：80", reply)
+        self.assertNotIn("后台指定", reply)
+        self.assertNotIn("未指定", reply)
 
     def test_notice_chain_and_notice_api_flow(self):
         plugin = self.make_plugin()

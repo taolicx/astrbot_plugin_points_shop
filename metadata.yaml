@@ -2,7 +2,7 @@ name: astrbot_plugin_points_shop
 display_name: points_shop
 description: Group points shop with sign-in, rps betting, item exchange, and shop poster.
 author: codex
-version: "0.1.23"
+version: "0.1.24"
 astrbot_version: ">=4.5.7"
 repo: "https://github.com/taolicx/astrbot_plugin_points_shop"
 support_platforms:

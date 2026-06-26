@@ -717,7 +717,7 @@
             <div class="section-title">
               <div>
                 <h2>玩法与通知</h2>
-                <p>集中设置猜拳积分档胜率、彩票倍率/开奖方式，以及周期性群通知。</p>
+                <p>集中设置猜拳积分档胜率、选号倍率/揭晓方式，以及周期性群通知。</p>
               </div>
               <div class="actions">
                 <button class="primary" id="saveGameSettingsBtn" type="button">保存玩法设置</button>
@@ -743,25 +743,25 @@
 
               <div class="field-grid">
                 <div class="field">
-                  <label for="lotteryMinBetInput">彩票最小下注</label>
+                  <label for="lotteryMinBetInput">选号最小参与积分</label>
                   <input id="lotteryMinBetInput" type="number" min="1" step="1" />
                 </div>
                 <div class="field">
-                  <label for="lotteryMaxBetInput">彩票最大下注</label>
+                  <label for="lotteryMaxBetInput">选号最大参与积分</label>
                   <input id="lotteryMaxBetInput" type="number" min="1" step="1" />
                 </div>
                 <div class="field">
-                  <label for="lotteryMultiplierInput">彩票中奖倍率</label>
+                  <label for="lotteryMultiplierInput">选号命中奖励倍率</label>
                   <input id="lotteryMultiplierInput" type="number" min="2" step="1" />
                 </div>
                 <div class="field">
-                  <label for="lotteryForcedNumberInput">指定开奖号码</label>
-                  <input id="lotteryForcedNumberInput" type="number" min="1" max="10" step="1" placeholder="留空为随机；开奖仍需手动触发" />
+                  <label for="lotteryForcedNumberInput">预设结果号码</label>
+                  <input id="lotteryForcedNumberInput" type="number" min="1" max="10" step="1" placeholder="留空为随机；结果仍需手动揭晓" />
                 </div>
               </div>
 
               <div class="actions">
-                <button class="secondary" id="drawLotteryBtn" type="button">立即开奖</button>
+                <button class="secondary" id="drawLotteryBtn" type="button">立即揭晓</button>
                 <div class="hint" id="lotteryMeta">当前参与：-</div>
               </div>
               <div class="hint" id="lotteryNumberStats">号码分布：-</div>
@@ -1555,7 +1555,7 @@
     function renderNoticeGroups() {
       const groups = state.settings?.notices?.known_groups || [];
       if (!groups.length) {
-        elements.noticeGroupSelect.innerHTML = `<div class="hint">暂无已记录群聊。先在目标群里用一次签到、积分、商店、猜拳、彩票或通知相关指令，让插件记住这个群。</div>`;
+        elements.noticeGroupSelect.innerHTML = `<div class="hint">暂无已记录群聊。先在目标群里用一次签到、积分、商店、猜拳、选号或通知相关指令，让插件记住这个群。</div>`;
         return;
       }
       elements.noticeGroupSelect.innerHTML = groups
@@ -1626,7 +1626,9 @@
       elements.lotteryMaxBetInput.value = String(lottery.max_bet ?? 100);
       elements.lotteryMultiplierInput.value = String(lottery.multiplier ?? 8);
       elements.lotteryForcedNumberInput.value = lottery.forced_number ?? "";
-      elements.lotteryMeta.textContent = `当前参与：${lottery.participant_count ?? lottery.bet_count ?? 0}，上期开奖：${lottery.last_draw_number ?? "-"}。每期每人仅可参与 1 次，开奖需手动触发。`;
+      const lastResult = lottery.last_result || {};
+      const lastResultLabel = lastResult.draw_number ? `${lastResult.draw_number}号 / 命中 ${lastResult.winner_count ?? 0} 人 / 发放 ${lastResult.reward_total ?? 0} 积分` : "-";
+      elements.lotteryMeta.textContent = `当前参与：${lottery.participant_count ?? lottery.bet_count ?? 0}，上次结果：${lastResultLabel}。每轮每人仅可参与 1 次，结果需手动揭晓。`;
       const numberStats = lottery.number_stats || {};
       const numberSummary = Array.from({ length: 10 }, (_, index) => {
         const number = index + 1;
@@ -2038,7 +2040,7 @@
     }
 
     async function handleDrawLottery() {
-      const confirmed = await askConfirm("确认立即执行彩票开奖吗？本期将直接结算并进入下一期。");
+      const confirmed = await askConfirm("确认立即揭晓本轮选号结果吗？本轮将直接结算并进入下一轮。");
       if (!confirmed) {
         return;
       }
@@ -2046,9 +2048,9 @@
       try {
         const payload = await apiPost("lottery/draw", {});
         await loadSettings();
-        showStatus(payload.message || "彩票开奖完成。", "info");
+        showStatus(payload.message || "选号结果已揭晓。", "info");
       } catch (error) {
-        showStatus(error.message || "开奖失败。", "error");
+        showStatus(error.message || "揭晓失败。", "error");
       } finally {
         elements.drawLotteryBtn.disabled = false;
       }
