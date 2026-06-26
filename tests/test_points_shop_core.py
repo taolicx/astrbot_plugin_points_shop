@@ -291,10 +291,11 @@ class PointsShopCoreTests(unittest.TestCase):
         reply = status_event.sent_results[-1]
         self.assertIn("上次结果号码：5", reply)
         self.assertIn("上次参与人数：1", reply)
-        self.assertIn("上次命中人数：1", reply)
+        self.assertIn("上次达成人数：1", reply)
         self.assertIn("上次发放积分：80", reply)
         self.assertNotIn("后台指定", reply)
         self.assertNotIn("未指定", reply)
+        self.assertNotIn("命中", reply)
 
     def test_notice_chain_and_notice_api_flow(self):
         plugin = self.make_plugin()

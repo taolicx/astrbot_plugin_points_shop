@@ -717,7 +717,7 @@
             <div class="section-title">
               <div>
                 <h2>玩法与通知</h2>
-                <p>集中设置猜拳积分档胜率、选号倍率/揭晓方式，以及周期性群通知。</p>
+                <p>集中设置猜拳积分档达成率、选号达成倍率/揭晓方式，以及周期性群通知。</p>
               </div>
               <div class="actions">
                 <button class="primary" id="saveGameSettingsBtn" type="button">保存玩法设置</button>
@@ -728,7 +728,7 @@
             <div class="stack">
               <div class="field-grid">
                 <div class="field">
-                  <label for="rpsDefaultWinRateInput">猜拳默认胜率 (%)</label>
+                  <label for="rpsDefaultWinRateInput">猜拳默认达成率 (%)</label>
                   <input id="rpsDefaultWinRateInput" type="number" min="0" max="100" step="1" />
                 </div>
                 <div class="field">
@@ -736,7 +736,7 @@
                   <input id="rpsDrawRateInput" type="number" min="0" max="100" step="1" />
                 </div>
                 <div class="field span-2">
-                  <label for="rpsSegmentsInput">积分档胜率</label>
+                  <label for="rpsSegmentsInput">积分档达成率</label>
                   <textarea id="rpsSegmentsInput" placeholder="示例：0-50:60&#10;51-200:45&#10;201-500:35&#10;501-*:20"></textarea>
                 </div>
               </div>
@@ -751,7 +751,7 @@
                   <input id="lotteryMaxBetInput" type="number" min="1" step="1" />
                 </div>
                 <div class="field">
-                  <label for="lotteryMultiplierInput">选号命中奖励倍率</label>
+                  <label for="lotteryMultiplierInput">选号达成奖励倍率</label>
                   <input id="lotteryMultiplierInput" type="number" min="2" step="1" />
                 </div>
                 <div class="field">
@@ -1627,7 +1627,7 @@
       elements.lotteryMultiplierInput.value = String(lottery.multiplier ?? 8);
       elements.lotteryForcedNumberInput.value = lottery.forced_number ?? "";
       const lastResult = lottery.last_result || {};
-      const lastResultLabel = lastResult.draw_number ? `${lastResult.draw_number}号 / 命中 ${lastResult.winner_count ?? 0} 人 / 发放 ${lastResult.reward_total ?? 0} 积分` : "-";
+      const lastResultLabel = lastResult.draw_number ? `${lastResult.draw_number}号 / 达成 ${lastResult.winner_count ?? 0} 人 / 发放 ${lastResult.reward_total ?? 0} 积分` : "-";
       elements.lotteryMeta.textContent = `当前参与：${lottery.participant_count ?? lottery.bet_count ?? 0}，上次结果：${lastResultLabel}。每轮每人仅可参与 1 次，结果需手动揭晓。`;
       const numberStats = lottery.number_stats || {};
       const numberSummary = Array.from({ length: 10 }, (_, index) => {

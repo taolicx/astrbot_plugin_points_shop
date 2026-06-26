@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - runtime dependency guard
 
 
 PLUGIN_NAME = "astrbot_plugin_points_shop"
-PLUGIN_VERSION = "0.1.24"
+PLUGIN_VERSION = "0.1.25"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 FRIEND_MESSAGE_TYPE = "FriendMessage"
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -282,7 +282,7 @@ class PointsShopPlugin(Star):
             f"{result}\n当前积分：{new_balance}",
         )
 
-    @filter.command("选号", alias={"幸运选号", "积分选号", "彩票", "积分彩票"}, priority=100)
+    @filter.command("选号", alias={"幸运选号", "积分选号"}, priority=100)
     async def lottery(self, event: AstrMessageEvent):
         if not self._enabled():
             return
@@ -290,7 +290,7 @@ class PointsShopPlugin(Star):
             await self._reply_and_stop(event, "选号需要在群聊里进行。")
             return
 
-        payload = self._command_payload(event, ("幸运选号", "积分选号", "积分彩票", "选号", "彩票"))
+        payload = self._command_payload(event, ("幸运选号", "积分选号", "选号"))
         action, number, stake = self._parse_lottery_payload(payload)
         if action == "status":
             async with self._lock:
@@ -300,7 +300,7 @@ class PointsShopPlugin(Star):
                 last_result = self._lottery_last_result()
                 lines = [
                     f"参与范围：{self._lottery_min_bet()}~{self._lottery_max_bet()} 积分",
-                    f"命中奖励：{self._lottery_multiplier()} 倍",
+                    f"达成奖励：{self._lottery_multiplier()} 倍",
                     f"当前参与人数：{len({str(bet.get('user_id') or '') for bet in bets})}",
                     "规则：每轮每人只能选择 1 个号码参与 1 次。",
                 ]
@@ -311,7 +311,7 @@ class PointsShopPlugin(Star):
                         [
                             f"上次结果号码：{last_result['draw_number']}",
                             f"上次参与人数：{last_result['participant_count']}",
-                            f"上次命中人数：{last_result['winner_count']}",
+                            f"上次达成人数：{last_result['winner_count']}",
                             f"上次发放积分：{last_result['reward_total']}",
                         ]
                     )
@@ -339,19 +339,19 @@ class PointsShopPlugin(Star):
                 reward = int(winner.get("stake") or 0) * int(result["multiplier"] or 1)
                 winner_lines.append(f"{winner.get('user_name') or winner.get('user_id')} 号码 {winner.get('number')} +{reward}")
             if len(result["winners"]) > 10:
-                winner_lines.append(f"... 其余 {len(result['winners']) - 10} 位命中者未展开")
+                winner_lines.append(f"... 其余 {len(result['winners']) - 10} 位达成者未展开")
             lines = [
                 "选号结果已揭晓",
                 f"结果号码：{result['draw_number']}",
                 f"参与人数：{result['participant_count']}",
-                f"命中人数：{result['winner_count']}",
+                f"达成人数：{result['winner_count']}",
                 f"发放总积分：{result['reward_total']}",
             ]
             if winner_lines:
-                lines.append("命中名单：")
+                lines.append("达成名单：")
                 lines.extend(winner_lines)
             else:
-                lines.append("本轮无人命中。")
+                lines.append("本轮无人达成。")
             await self._reply_and_stop(event, "\n".join(lines))
             return
 
@@ -416,7 +416,7 @@ class PointsShopPlugin(Star):
         bet_desc = "，".join(f"{entry['number']}号 {entry['stake']}积分" for entry in sorted(user_bets, key=lambda item: int(item["number"])))
         await self._reply_and_stop(
             event,
-            f"已参与成功\n你的选择：{bet_desc}\n命中奖励：{self._lottery_multiplier()} 倍\n当前积分：{new_balance}",
+            f"已参与成功\n你的选择：{bet_desc}\n达成奖励：{self._lottery_multiplier()} 倍\n当前积分：{new_balance}",
         )
     @filter.command("兑换商城", alias={"商店", "积分商城", "商品列表", "兑换列表"}, priority=100)
     async def shop(self, event: AstrMessageEvent):
@@ -2722,9 +2722,9 @@ class PointsShopPlugin(Star):
         if not parts:
             return "status", None, None
         head = parts[0].lower()
-        if head in {"揭晓", "开奖", "结算", "draw", "settle"}:
+        if head in {"揭晓", "draw", "settle"}:
             return "draw", None, None
-        if head in {"设号", "设奖", "指定", "结果号", "开奖结果", "set"}:
+        if head in {"设号", "set"}:
             if len(parts) >= 2:
                 token = parts[1].strip().lower()
                 if token in {"随机", "清除", "clear", "random"}:
@@ -3567,7 +3567,7 @@ class PointsShopPlugin(Star):
             "积分 - 查看当前积分余额\n"
             "积分排行 - 查看全局积分排行榜\n"
             f"猜拳 <石头|剪刀|布> <积分> - 参与猜拳，范围 {self._min_bet()}~{self._max_bet()}，结果按你当前积分档位结算\n"
-            f"选号 <1-10> <积分> - 参与选号，范围 {self._lottery_min_bet()}~{self._lottery_max_bet()}，每轮每人限参与 1 次，命中可得 {self._lottery_multiplier()} 倍\n"
+            f"选号 <1-10> <积分> - 参与选号，范围 {self._lottery_min_bet()}~{self._lottery_max_bet()}，每轮每人限参与 1 次，达成可得 {self._lottery_multiplier()} 倍\n"
             "选号 揭晓 - 管理员立即揭晓本轮结果\n"
             "选号 设号 <1-10|随机> - 管理员预设或清除本轮结果号码\n"
             "商店 - 查看精美商品图\n"
@@ -3632,8 +3632,6 @@ class PointsShopPlugin(Star):
             "选号": self.lottery,
             "积分选号": self.lottery,
             "幸运选号": self.lottery,
-            "彩票": self.lottery,
-            "积分彩票": self.lottery,
             "商店": self.shop,
             "兑换商城": self.shop,
             "积分商城": self.shop,
@@ -3674,8 +3672,6 @@ class PointsShopPlugin(Star):
             ("幸运选号", self.lottery),
             ("积分选号", self.lottery),
             ("选号", self.lottery),
-            ("彩票", self.lottery),
-            ("积分彩票", self.lottery),
             ("通知设置", self.notice_set),
             ("商城通知设置", self.notice_set),
             ("通知发送", self.notice_send_now),
